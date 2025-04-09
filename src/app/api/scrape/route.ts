@@ -131,7 +131,13 @@ export async function POST(request: Request) {
 
         // In production, make the actual API call
         const body = await request.json();
-        const response = await fetch('https://api.apify.com/v2/acts/your-actor/runs/last/dataset/items?token=your-token', {
+        const apifyToken = process.env.APIFY_API_TOKEN;
+
+        if (!apifyToken) {
+            throw new Error('Apify API token is missing');
+        }
+
+        const response = await fetch('https://api.apify.com/v2/acts/curious_coder~facebook-ads-library-scraper/run-sync-get-dataset-items?token=' + apifyToken, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
