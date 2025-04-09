@@ -3,7 +3,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import AdTable from '../../components/AdTable';
 import clsx from 'clsx';
-import { use } from 'react';
 
 interface Ad {
     ad_archive_id: string;
@@ -31,11 +30,11 @@ interface PageParams {
     id: string;
 }
 
-export default function ProjectPage({ params }: { params: Promise<PageParams> }) {
+export default function ProjectPage({ params }: { params: PageParams }) {
     const [activeTab, setActiveTab] = useState<ActiveTab>('image');
     const [ads, setAds] = useState<Ad[]>([]);
     const [pageName, setPageName] = useState<string>('');
-    const { id } = use(params);
+    const { id } = params;
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
