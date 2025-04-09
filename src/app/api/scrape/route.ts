@@ -1,4 +1,13 @@
 import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
+import { createWorkflow } from '@/lib/db';
+import { createClient } from '@supabase/supabase-js';
+
+// Create a Supabase client with the service role key to bypass RLS
+const supabaseAdmin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+);
 
 const mockAds = [
     {
@@ -121,58 +130,86 @@ const mockAds = [
 
 export async function POST(request: Request) {
     try {
-        // In development, return mock data
-        if (process.env.NODE_ENV === 'development') {
-            return NextResponse.json({
-                success: true,
-                data: mockAds
-            });
+        const user = await requireAuth(request);
+
+        if (!user?.id) {
+            // This is the unauthorized response from requireAuth
+            return user;
         }
 
-        // In production, make the actual API call
         const body = await request.json();
-        const apifyToken = process.env.APIFY_API_TOKEN;
 
-        if (!apifyToken) {
-            throw new Error('Apify API token is missing');
+        let adsData;
+
+        // In development, use mock data
+        if (process.env.NODE_ENV === 'development') {
+            adsData = mockAds;
+        } else {
+            // In production, make the actual API call
+            const apifyToken = process.env.APIFY_API_TOKEN;
+
+            if (!apifyToken) {
+                throw new Error('Apify API token is missing');
+            }
+
+            const apifyRequestBody = {
+                count: 5,
+                scrapeAdDetails: false,
+                "scrapePageAds.activeStatus": "active",
+                urls: [
+                    {
+                        url: body.facebookAdUrl,
+                        method: "GET"
+                    }
+                ]
+            };
+
+            console.log('Making request to Apify with body:', JSON.stringify(apifyRequestBody, null, 2));
+
+            const response = await fetch('https://api.apify.com/v2/acts/curious_coder~facebook-ads-library-scraper/run-sync-get-dataset-items?token=' + apifyToken, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(apifyRequestBody),
+            });
+
+            console.log('Apify response status:', response.status);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Apify error response:', errorText);
+                throw new Error(`Failed to fetch data from Apify: ${response.status} ${response.statusText} - ${errorText}`);
+            }
+
+            adsData = await response.json();
+            console.log('Apify response data:', JSON.stringify(adsData, null, 2));
         }
 
-        const apifyRequestBody = {
-            count: 10,
-            scrapeAdDetails: false,
-            "scrapePageAds.activeStatus": "active",
-            urls: [
-                {
-                    url: body.facebookAdUrl,
-                    method: "GET"
-                }
-            ]
-        };
+        // Get page_name from the first ad or use default
+        const pageName = adsData[0]?.page_name || `Workflow ${new Date().toLocaleDateString()}`;
 
-        console.log('Making request to Apify with body:', JSON.stringify(apifyRequestBody, null, 2));
+        // Create workflow in database using admin client
+        const { data: workflow, error } = await supabaseAdmin
+            .from('workflows')
+            .insert({
+                user_id: user.id,
+                name: pageName,
+                ads: adsData,
+                created_at: new Date().toISOString()
+            })
+            .select()
+            .single();
 
-        const response = await fetch('https://api.apify.com/v2/acts/curious_coder~facebook-ads-library-scraper/run-sync-get-dataset-items?token=' + apifyToken, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(apifyRequestBody),
-        });
-
-        console.log('Apify response status:', response.status);
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Apify error response:', errorText);
-            throw new Error(`Failed to fetch data from Apify: ${response.status} ${response.statusText} - ${errorText}`);
+        if (error) {
+            console.error('Error creating workflow:', error);
+            throw new Error('Failed to create workflow');
         }
-
-        const data = await response.json();
-        console.log('Apify response data:', JSON.stringify(data, null, 2));
 
         return NextResponse.json({
             success: true,
-            data
+            data: adsData,
+            workflow
         });
     } catch (error) {
         console.error('Error in scrape route:', error);

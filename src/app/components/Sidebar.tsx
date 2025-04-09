@@ -9,20 +9,50 @@ import {
     MagnifyingGlassIcon,
     Cog6ToothIcon,
     UserIcon,
+    ArrowRightOnRectangleIcon,
+    ArrowLeftOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 import { Dialog, Transition } from '@headlessui/react';
 import clsx from 'clsx';
+import { useRouter } from 'next/navigation';
 
-const navigation = [
-    { name: 'Dashboard', href: '/', icon: HomeIcon },
+// Define navigation items for authenticated users
+const authNavigation = [
+    { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
     { name: 'Ad Scraper', href: '/projects/new', icon: MagnifyingGlassIcon },
     { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
     { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },
 ];
 
-export default function Sidebar() {
+// Define navigation items for non-authenticated users
+const publicNavigation = [
+    { name: 'Home', href: '/', icon: HomeIcon },
+    { name: 'Login', href: '/login', icon: ArrowRightOnRectangleIcon },
+    { name: 'Register', href: '/register', icon: UserIcon },
+];
+
+interface SidebarProps {
+    isAuthenticated: boolean;
+}
+
+export default function Sidebar({ isAuthenticated }: SidebarProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const pathname = usePathname();
+    const router = useRouter();
+
+    // Choose navigation based on authentication status
+    const navigation = isAuthenticated ? authNavigation : publicNavigation;
+
+    const handleLogout = async () => {
+        try {
+            await fetch('/api/auth/logout', {
+                method: 'POST',
+            });
+            router.push('/login');
+        } catch (error) {
+            console.error('Error logging out:', error);
+        }
+    };
 
     return (
         <>
@@ -54,7 +84,7 @@ export default function Sidebar() {
                             <Dialog.Panel className="relative mr-16 flex w-full max-w-xs flex-1">
                                 <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white px-6 pb-4">
                                     <div className="flex h-16 shrink-0 items-center">
-                                        <span className="text-xl font-bold text-gray-900">Ecom AI</span>
+                                        <Link href="/" className="text-xl font-bold text-gray-900">Ecom AI</Link>
                                     </div>
                                     <nav className="flex flex-1 flex-col">
                                         <ul role="list" className="flex flex-1 flex-col gap-y-7">
@@ -97,7 +127,7 @@ export default function Sidebar() {
             <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
                 <div className="flex grow flex-col gap-y-5 overflow-y-auto border-r border-gray-200 bg-white px-6 pb-4">
                     <div className="flex h-16 shrink-0 items-center">
-                        <span className="text-xl font-bold text-gray-900">Ecom AI</span>
+                        <Link href="/" className="text-xl font-bold text-gray-900">Ecom AI</Link>
                     </div>
                     <nav className="flex flex-1 flex-col">
                         <ul role="list" className="flex flex-1 flex-col gap-y-7">
@@ -127,18 +157,20 @@ export default function Sidebar() {
                                     ))}
                                 </ul>
                             </li>
-                            <li className="mt-auto">
-                                <Link
-                                    href="/profile"
-                                    className="group -mx-2 flex gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
-                                >
-                                    <UserIcon
-                                        className="h-6 w-6 shrink-0 text-gray-400 group-hover:text-indigo-600 transition-colors"
-                                        aria-hidden="true"
-                                    />
-                                    Profile
-                                </Link>
-                            </li>
+                            {isAuthenticated && (
+                                <li className="mt-auto">
+                                    <button
+                                        onClick={handleLogout}
+                                        className="group -mx-2 flex w-full gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                                    >
+                                        <ArrowLeftOnRectangleIcon
+                                            className="h-6 w-6 shrink-0 text-gray-400 group-hover:text-indigo-600 transition-colors"
+                                            aria-hidden="true"
+                                        />
+                                        Logout
+                                    </button>
+                                </li>
+                            )}
                         </ul>
                     </nav>
                 </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import clsx from 'clsx';
 
@@ -28,6 +28,32 @@ export default function NewProjectPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [facebookAdUrl, setFacebookAdUrl] = useState('');
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+    // Check if user is authenticated
+    useEffect(() => {
+        const checkAuth = async () => {
+            try {
+                const response = await fetch('/api/auth/me');
+                const data = await response.json();
+                setIsAuthenticated(!!data.user);
+            } catch (error) {
+                console.error('Failed to check authentication status:', error);
+            } finally {
+                setIsCheckingAuth(false);
+            }
+        };
+
+        checkAuth();
+    }, []);
+
+    // Redirect to login if not authenticated
+    useEffect(() => {
+        if (!isCheckingAuth && !isAuthenticated) {
+            router.push('/login?redirect=/projects/new');
+        }
+    }, [isAuthenticated, isCheckingAuth, router]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -46,37 +72,40 @@ export default function NewProjectPage() {
             });
 
             if (!response.ok) {
-                throw new Error('Failed to fetch ads');
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to fetch ads');
             }
 
             const data = await response.json();
 
-            // Create a new project with the fetched ads
-            const projectId = Date.now().toString();
-            localStorage.setItem(`project_${projectId}_ads`, JSON.stringify(data.data));
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to scrape ads');
+            }
 
-            // Save workflow
-            const workflowName = data.data[0]?.page_name || `Workflow ${new Date().toLocaleDateString()}`;
-            const workflow = {
-                id: projectId,
-                name: workflowName,
-                createdAt: new Date().toISOString(),
-                ads: data.data,
-            };
-
-            const savedWorkflows = localStorage.getItem('workflows');
-            const workflows = savedWorkflows ? JSON.parse(savedWorkflows) : [];
-            workflows.push(workflow);
-            localStorage.setItem('workflows', JSON.stringify(workflows));
-
-            // Navigate to the new project page
-            router.push(`/projects/${projectId}`);
+            // Navigate to the new workflow page
+            router.push(`/projects/${data.workflow.id}`);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'An error occurred');
         } finally {
             setIsLoading(false);
         }
     };
+
+    if (isCheckingAuth) {
+        return (
+            <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                <div className="px-4 py-6 sm:px-0">
+                    <div className="bg-white shadow sm:rounded-lg p-6">
+                        <p className="text-center">Loading...</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (!isAuthenticated) {
+        return null; // Don't render anything while redirecting
+    }
 
     return (
         <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
