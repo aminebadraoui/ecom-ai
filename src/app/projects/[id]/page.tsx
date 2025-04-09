@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import AdTable from '../../components/AdTable';
 import clsx from 'clsx';
+import { useRouter } from 'next/navigation';
 
 interface Ad {
     ad_archive_id: string;
@@ -31,11 +32,12 @@ interface PageParams {
 }
 
 export default function ProjectPage({ params }: { params: PageParams }) {
+    const router = useRouter();
     const [activeTab, setActiveTab] = useState<ActiveTab>('image');
     const [ads, setAds] = useState<Ad[]>([]);
     const [pageName, setPageName] = useState<string>('');
     const { id } = params;
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -44,43 +46,38 @@ export default function ProjectPage({ params }: { params: PageParams }) {
     const [country, setCountry] = useState('');
     const [language, setLanguage] = useState('');
 
-    // Mock data for testing
-    const mockAds: Ad[] = [
-        {
-            "ad_archive_id": "486517397763120",
-            "start_date": 1744009200,
-            "url": "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&is_targeted_country=false&media_type=all&q=vibriance&search_type=keyword_unordered",
-            "page_name": "Vibriance Eye Renewal Serum",
-            "snapshot": {
-                "body": {
-                    "text": "{{product.brand}}"
-                },
-                "cards": [
-                    {
-                        "body": "\"The first time I used it I noticed my eye bags looked a lot smaller. Shortly after I saw my dark circles were lighter, I'm shocked how well this worked!\"\n\nCathy O. - Eye Renewal Serum Customer\n\nExclusively made for your 50's, 60's, 70's and beyond…\n\nVibriance Eye Renewal Serum rejuvenates skin under eyes for a well-rested appearance.\n\nThis multi-tasking eye serum replaces 3 products. It's your tightening, brightening, and wrinkle-reducing treatment all-in-one.\n\nIt can reduce the appearance of under-eye bags the very first time you use it!\n\nExperience the Vibriance difference today:\n\nhttps://secure.vibriance.com/",
-                        "resized_image_url": "https://scontent.fkwi3-2.fna.fbcdn.net/v/t39.35426-6/462046481_2239039966461422_6503903250882923093_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=IgAHPHT2hkAQ7kNvwF6gPxH&_nc_oc=AdnqIkSPNUXKZgcnFEVvU_9BgsG8typ5XNCHmgNG0QEUtDNWV91xa3_jBjqWfOadZgY&_nc_zt=14&_nc_ht=scontent.fkwi3-2.fna&_nc_gid=4BIZ04PnOVnaujfYNhy9KQ&oh=00_AfEDO9AByiXwRyXSQPcNrtA14lYdgAUjjB8RDoa_4lyS8w&oe=67FB9D05"
-                    }
-                ],
-                "videos": []
-            }
-        }
-    ];
-
-    // Load ads from localStorage on component mount
+    // Load workflow data from API on mount
     useEffect(() => {
-        if (typeof window !== 'undefined') {
-            const savedAds = localStorage.getItem(`project_${id}_ads`);
-            if (savedAds) {
-                const parsedAds = JSON.parse(savedAds);
-                setAds(parsedAds);
-                if (parsedAds.length > 0) {
-                    setPageName(parsedAds[0].page_name);
+        const fetchWorkflow = async () => {
+            setIsLoading(true);
+            try {
+                // Fetch workflow from API
+                const response = await fetch(`/api/workflows/${id}`);
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        // If unauthorized, redirect to login
+                        router.push('/login');
+                        return;
+                    }
+                    throw new Error('Failed to fetch workflow');
                 }
-            } else {
-                setAds(mockAds);
+
+                const data = await response.json();
+                if (data.workflow) {
+                    setPageName(data.workflow.name);
+                    setAds(data.workflow.ads || []);
+                }
+            } catch (err) {
+                console.error('Error fetching workflow:', err);
+                setError(err instanceof Error ? err.message : 'Failed to load workflow');
+            } finally {
+                setIsLoading(false);
             }
-        }
-    }, [id]);
+        };
+
+        fetchWorkflow();
+    }, [id, router]);
 
     const filteredAds = useMemo(() => {
         if (activeTab === 'image') {
@@ -119,21 +116,21 @@ export default function ProjectPage({ params }: { params: PageParams }) {
 
             const data = await response.json();
             setAds(data.ads);
-            localStorage.setItem(`project_${id}_ads`, JSON.stringify(data.ads));
 
-            // Save workflow
-            const workflowName = data.ads[0]?.page_name || `Workflow ${new Date().toLocaleDateString()}`;
-            const workflow = {
-                id: Date.now().toString(),
-                name: workflowName,
-                createdAt: new Date().toISOString(),
-                ads: data.ads,
-            };
+            // Update workflow via API
+            const updateResponse = await fetch(`/api/workflows/${id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    ads: data.ads
+                }),
+            });
 
-            const savedWorkflows = localStorage.getItem('workflows');
-            const workflows = savedWorkflows ? JSON.parse(savedWorkflows) : [];
-            workflows.push(workflow);
-            localStorage.setItem('workflows', JSON.stringify(workflows));
+            if (!updateResponse.ok) {
+                throw new Error('Failed to update workflow');
+            }
 
             setSuccess('Ads fetched successfully!');
         } catch (err) {
@@ -142,6 +139,37 @@ export default function ProjectPage({ params }: { params: PageParams }) {
             setIsLoading(false);
         }
     };
+
+    if (isLoading) {
+        return (
+            <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                <div className="px-4 py-6 sm:px-0">
+                    <div className="bg-white shadow sm:rounded-lg p-6">
+                        <p className="text-center">Loading...</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                <div className="px-4 py-6 sm:px-0">
+                    <div className="bg-white shadow sm:rounded-lg p-6">
+                        <h3 className="text-lg font-medium text-red-800">Error</h3>
+                        <p className="mt-2 text-sm text-red-700">{error}</p>
+                        <button
+                            onClick={() => router.push('/dashboard')}
+                            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Back to Dashboard
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
