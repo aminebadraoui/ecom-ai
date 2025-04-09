@@ -153,7 +153,7 @@ export async function POST(request: Request) {
             }
 
             const apifyRequestBody = {
-                count: 5,
+                count: 100,
                 scrapeAdDetails: false,
                 "scrapePageAds.activeStatus": "active",
                 urls: [
