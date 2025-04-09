@@ -137,14 +137,26 @@ export async function POST(request: Request) {
             throw new Error('Apify API token is missing');
         }
 
-        console.log('Making request to Apify with body:', JSON.stringify(body, null, 2));
+        const apifyRequestBody = {
+            count: 5,
+            scrapeAdDetails: false,
+            "scrapePageAds.activeStatus": "active",
+            urls: [
+                {
+                    url: body.facebookAdUrl,
+                    method: "GET"
+                }
+            ]
+        };
+
+        console.log('Making request to Apify with body:', JSON.stringify(apifyRequestBody, null, 2));
 
         const response = await fetch('https://api.apify.com/v2/acts/curious_coder~facebook-ads-library-scraper/run-sync-get-dataset-items?token=' + apifyToken, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(body),
+            body: JSON.stringify(apifyRequestBody),
         });
 
         console.log('Apify response status:', response.status);
