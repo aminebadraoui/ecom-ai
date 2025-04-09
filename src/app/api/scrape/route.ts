@@ -137,6 +137,8 @@ export async function POST(request: Request) {
             throw new Error('Apify API token is missing');
         }
 
+        console.log('Making request to Apify with body:', JSON.stringify(body, null, 2));
+
         const response = await fetch('https://api.apify.com/v2/acts/curious_coder~facebook-ads-library-scraper/run-sync-get-dataset-items?token=' + apifyToken, {
             method: 'POST',
             headers: {
@@ -145,20 +147,27 @@ export async function POST(request: Request) {
             body: JSON.stringify(body),
         });
 
+        console.log('Apify response status:', response.status);
+
         if (!response.ok) {
-            throw new Error('Failed to fetch data from Apify');
+            const errorText = await response.text();
+            console.error('Apify error response:', errorText);
+            throw new Error(`Failed to fetch data from Apify: ${response.status} ${response.statusText} - ${errorText}`);
         }
 
         const data = await response.json();
+        console.log('Apify response data:', JSON.stringify(data, null, 2));
+
         return NextResponse.json({
             success: true,
             data
         });
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error in scrape route:', error);
         return NextResponse.json({
             success: false,
-            error: error instanceof Error ? error.message : 'An error occurred'
+            error: error instanceof Error ? error.message : 'An error occurred',
+            details: error instanceof Error ? error.stack : undefined
         }, { status: 500 });
     }
 } 
