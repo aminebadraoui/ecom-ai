@@ -9,6 +9,7 @@ const publicPaths = [
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/me',
+    '/api/debug',
     '/'
 ];
 
@@ -29,7 +30,7 @@ export function middleware(request: NextRequest) {
     if (!token) {
         // Redirect to login if no token
         const url = new URL('/login', request.url);
-        url.searchParams.set('redirect', pathname);
+        url.searchParams.set('redirect', encodeURIComponent(pathname));
         return NextResponse.redirect(url);
     }
 
@@ -44,10 +45,23 @@ export function middleware(request: NextRequest) {
         // Token is valid, proceed
         return NextResponse.next();
     } catch (error) {
-        // Token is invalid, redirect to login
+        console.error('Token verification error:', error);
+
+        // Clear the invalid token cookie
+        const response = NextResponse.redirect(new URL('/login', request.url));
+        response.cookies.set({
+            name: 'auth_token',
+            value: '',
+            expires: new Date(0),
+            path: '/',
+            sameSite: 'lax'
+        });
+
+        // Redirect to login
         const url = new URL('/login', request.url);
-        url.searchParams.set('redirect', pathname);
-        return NextResponse.redirect(url);
+        url.searchParams.set('redirect', encodeURIComponent(pathname));
+        url.searchParams.set('error', 'session_expired');
+        return response;
     }
 }
 
