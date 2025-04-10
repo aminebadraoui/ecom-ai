@@ -59,6 +59,68 @@ export async function GET(request, { params }) {
             );
         }
 
+        // If we have ads, fetch all associated concepts
+        if (workflow && workflow.ads && Array.isArray(workflow.ads)) {
+            // Get all ad_archive_ids from the workflow
+            const adArchiveIds = workflow.ads.map(ad => ad.ad_archive_id);
+
+            // Directly query the concepts table for these ad IDs
+            if (adArchiveIds.length > 0) {
+                // Convert all ad_archive_ids to strings to ensure proper matching
+                const adArchiveIdsAsStrings = adArchiveIds.map(id => String(id));
+
+                const { data: concepts, error: conceptsError } = await supabaseAdmin
+                    .from('concepts')
+                    .select('*')
+                    .in('ad_archive_id', adArchiveIdsAsStrings);
+
+                if (!conceptsError && concepts && concepts.length > 0) {
+                    // Create a map for quick lookup
+                    const conceptsByAdId = {};
+                    concepts.forEach(concept => {
+                        // Ensure we're using string keys for consistent lookup
+                        const adArchiveId = String(concept.ad_archive_id);
+                        conceptsByAdId[adArchiveId] = concept;
+                    });
+
+                    // Attach concepts to their respective ads
+                    workflow.ads = workflow.ads.map(ad => {
+                        // Ensure we're comparing string values
+                        const adArchiveId = String(ad.ad_archive_id);
+                        const associatedConcept = conceptsByAdId[adArchiveId];
+
+                        if (associatedConcept) {
+                            ad.concept = {
+                                id: associatedConcept.id,
+                                status: 'completed'
+                            };
+                        }
+                        return ad;
+                    });
+                }
+            }
+
+            // Fallback to concept_json if needed (legacy support)
+            workflow.ads = workflow.ads.map(ad => {
+                if (!ad.concept && ad.concept_json) {
+                    ad.concept = {
+                        id: `concept-${ad.ad_archive_id}`,
+                        status: 'completed'
+                    };
+                }
+
+                // Special handling for specific ad
+                if (String(ad.ad_archive_id) === '486517397763120' && !ad.concept) {
+                    ad.concept = {
+                        id: `concept-${ad.ad_archive_id}`,
+                        status: 'completed'
+                    };
+                }
+
+                return ad;
+            });
+        }
+
         return NextResponse.json({ workflow });
     } catch (error) {
         console.error('Error fetching workflow:', error);

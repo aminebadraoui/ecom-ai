@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -11,6 +11,8 @@ import {
     UserIcon,
     ArrowRightOnRectangleIcon,
     ArrowLeftOnRectangleIcon,
+    DocumentTextIcon,
+    PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { Dialog, Transition } from '@headlessui/react';
 import clsx from 'clsx';
@@ -20,6 +22,8 @@ import { useRouter } from 'next/navigation';
 const authNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
     { name: 'Ad Scraper', href: '/projects/new', icon: MagnifyingGlassIcon },
+    { name: 'Ad Concepts', href: '/concepts', icon: PhotoIcon },
+    { name: 'Ad Recipes', href: '/ad-recipes', icon: DocumentTextIcon },
     { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
     { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },
 ];
@@ -114,6 +118,20 @@ export default function Sidebar({ isAuthenticated }: SidebarProps) {
                                                     ))}
                                                 </ul>
                                             </li>
+                                            {isAuthenticated && (
+                                                <li className="mt-auto">
+                                                    <button
+                                                        onClick={handleLogout}
+                                                        className="group -mx-2 flex w-full gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                                                    >
+                                                        <ArrowLeftOnRectangleIcon
+                                                            className="h-6 w-6 shrink-0 text-gray-400 group-hover:text-indigo-600 transition-colors"
+                                                            aria-hidden="true"
+                                                        />
+                                                        Logout
+                                                    </button>
+                                                </li>
+                                            )}
                                         </ul>
                                     </nav>
                                 </div>
@@ -157,6 +175,7 @@ export default function Sidebar({ isAuthenticated }: SidebarProps) {
                                     ))}
                                 </ul>
                             </li>
+
                             {isAuthenticated && (
                                 <li className="mt-auto">
                                     <button
