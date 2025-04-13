@@ -33,7 +33,7 @@ interface Ad {
     concept?: {
         id: string | null;
         task_id: string | null;
-        status: 'pending' | 'completed' | 'failed';
+        status: 'pending' | 'processing' | 'completed' | 'failed';
         concept_json?: any;
         error?: string;
     };
