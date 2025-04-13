@@ -142,7 +142,7 @@ export async function POST(request: Request) {
         let adsData;
 
         // In development, use mock data
-        if (process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === 'test') {
             adsData = mockAds;
         } else {
             // In production, make the actual API call

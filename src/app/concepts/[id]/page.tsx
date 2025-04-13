@@ -1,132 +1,118 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import DynamicJsonViewer from '../../components/DynamicJsonViewer';
 
-interface ConceptData {
-    layout?: {
-        primaryElement?: string;
-        components?: Array<{
-            type?: string;
-            position?: string;
-            style?: string;
-            [key: string]: any;
-        }>;
-        background?: {
-            type?: string;
-            color?: string;
-            [key: string]: any;
-        } | string;
-        [key: string]: any;
-    };
-    messaging?: {
-        tone?: string;
-        approach?: string;
-        keyElements?: string[];
-        [key: string]: any;
-    };
-    visualStyle?: {
-        colorScheme?: string;
-        imageType?: string;
-        textOverlay?: string;
-        [key: string]: any;
-    };
-    template_name?: string;
-    visual_tone?: string;
-    design_purpose?: {
-        goals?: string[];
-        marketing_goals?: string[];
-        [key: string]: any;
-    };
-    components?: Array<{
-        type?: string;
-        position?: string | { [key: string]: any };
-        [key: string]: any;
-    }>;
-    [key: string]: any; // To support any other dynamic properties
-}
-
-interface AdConcept {
+interface ConceptDetails {
     id: string;
+    user_id: string;
     ad_archive_id: string;
-    page_name: string;
-    concept_json: ConceptData;
+    page_name: string | null;
+    concept_json: {
+        title: string;
+        summary: string;
+        details: {
+            elements: Array<{
+                type: string;
+                position: string;
+                purpose: string;
+                styling: string;
+            }>;
+            visual_flow: string;
+            visual_tone: string;
+            best_practices: string[];
+            color_palette: {
+                primary: string;
+                secondary: string;
+                accent: string;
+            };
+            spacing_strategy: string;
+        };
+    };
+    task_id: string;
+    status: 'pending' | 'completed' | 'failed';
     created_at: string;
+    updated_at: string;
+    error?: string;
 }
 
-interface PageParams {
-    id: string;
-}
-
-export default function ConceptDetailPage({ params }: { params: PageParams }) {
+export default function ConceptPage({ params }: { params: { id: string } }) {
     const router = useRouter();
-    const [concept, setConcept] = useState<AdConcept | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const [concept, setConcept] = useState<ConceptDetails | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'summary' | 'json'>('summary');
-    const { id } = params;
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         const fetchConcept = async () => {
-            setIsLoading(true);
             try {
-                // Fetch concept from API
-                const response = await fetch(`/api/ad-concepts/${id}`);
-
+                const response = await fetch(`/api/ad-concepts/${params.id}`);
                 if (!response.ok) {
-                    if (response.status === 401) {
-                        // If unauthorized, redirect to login
+                    if (response.status === 404) {
+                        setError('Concept not found');
+                    } else if (response.status === 401) {
                         router.push('/login');
                         return;
+                    } else {
+                        throw new Error('Failed to fetch concept');
                     }
-                    throw new Error('Failed to fetch concept');
+                    return;
                 }
 
                 const data = await response.json();
-                if (data.concept) {
-                    setConcept(data.concept);
-                } else {
-                    throw new Error('Concept not found');
+                setConcept(data.concept);
+
+                // If the concept is still pending, set up SSE connection
+                if (data.concept.status === 'pending') {
+                    const eventSource = new EventSource(`/api/ad-concepts/${params.id}/stream`, {
+                        withCredentials: true
+                    });
+
+                    eventSource.onmessage = (event) => {
+                        const updatedData = JSON.parse(event.data);
+                        setConcept(prev => ({
+                            ...prev!,
+                            status: updatedData.status,
+                            concept_json: updatedData.concept_json,
+                            error: updatedData.error
+                        }));
+
+                        if (updatedData.status === 'completed' || updatedData.status === 'failed') {
+                            eventSource.close();
+                        }
+                    };
+
+                    eventSource.onerror = () => {
+                        console.error('SSE connection error');
+                        eventSource.close();
+                    };
+
+                    return () => {
+                        eventSource.close();
+                    };
                 }
             } catch (err) {
                 console.error('Error fetching concept:', err);
-                setError(err instanceof Error ? err.message : 'Failed to load concept');
+                setError(err instanceof Error ? err.message : 'An error occurred');
             } finally {
                 setIsLoading(false);
             }
         };
 
         fetchConcept();
-    }, [id, router]);
-
-    const handleGenerateAd = async () => {
-        try {
-            // Find a product to use (in a real app, you'd let the user choose)
-            const productsResponse = await fetch('/api/products');
-            const productsData = await productsResponse.json();
-
-            if (!productsResponse.ok || !productsData.products || productsData.products.length === 0) {
-                throw new Error('No products available to generate ad');
-            }
-
-            const productId = productsData.products[0].id;
-
-            // Create ad recipe
-            router.push(`/ad-recipe?concepts=${id}&product=${productId}`);
-        } catch (err) {
-            console.error('Error preparing ad generation:', err);
-            setError(err instanceof Error ? err.message : 'Failed to prepare ad generation');
-        }
-    };
+    }, [params.id, router]);
 
     if (isLoading) {
         return (
             <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
                 <div className="px-4 py-6 sm:px-0">
-                    <div className="bg-white shadow sm:rounded-lg p-6">
-                        <p className="text-center">Loading...</p>
+                    <div className="animate-pulse">
+                        <div className="h-8 bg-gray-200 rounded w-1/4 mb-4"></div>
+                        <div className="space-y-3">
+                            <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                            <div className="h-4 bg-gray-200 rounded w-2/3"></div>
+                            <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -140,210 +126,139 @@ export default function ConceptDetailPage({ params }: { params: PageParams }) {
                     <div className="bg-white shadow sm:rounded-lg p-6">
                         <h3 className="text-lg font-medium text-red-800">Error</h3>
                         <p className="mt-2 text-sm text-red-700">{error || 'Concept not found'}</p>
-                        <button
-                            onClick={() => router.push('/dashboard')}
+                        <Link
+                            href="/dashboard"
                             className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                         >
                             Back to Dashboard
-                        </button>
+                        </Link>
                     </div>
                 </div>
             </div>
         );
     }
 
-    // Try to extract top-level properties for summary view if available
-    const layoutInfo = concept.concept_json.layout || {};
-    const messagingInfo = concept.concept_json.messaging || {};
-    const visualStyleInfo = concept.concept_json.visualStyle || {};
-
-    // Check for alternative structure patterns
-    const templateName = concept.concept_json.template_name || '';
-    const visualTone = concept.concept_json.visual_tone || '';
-    const designPurpose = concept.concept_json.design_purpose || {};
-    const components = concept.concept_json.components || [];
-
     return (
         <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
             <div className="px-4 py-6 sm:px-0">
-                <div className="flex justify-between items-center mb-6">
-                    <h1 className="text-2xl font-semibold text-gray-900">Ad Concept</h1>
-                    <div className="flex space-x-3">
-                        <Link
-                            href="/concepts"
-                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        >
-                            All Concepts
-                        </Link>
-                        <button
-                            onClick={() => router.push('/dashboard')}
-                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        >
-                            Back to Dashboard
-                        </button>
-                    </div>
-                </div>
+                <div className="bg-white shadow sm:rounded-lg">
+                    <div className="px-4 py-5 sm:p-6">
+                        <div className="flex justify-between items-center mb-6">
+                            <h1 className="text-2xl font-semibold text-gray-900">
+                                {concept.concept_json?.title || 'Ad Concept'}
+                            </h1>
+                            <span className={`px-3 py-1 rounded-full text-sm font-medium ${concept.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                    concept.status === 'failed' ? 'bg-red-100 text-red-800' :
+                                        'bg-yellow-100 text-yellow-800'
+                                }`}>
+                                {concept.status.charAt(0).toUpperCase() + concept.status.slice(1)}
+                            </span>
+                        </div>
 
-                <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-                    <div className="px-4 py-5 sm:px-6">
-                        <h3 className="text-lg leading-6 font-medium text-gray-900">
-                            {concept.page_name || templateName || 'Concept Details'}
-                        </h3>
-                        <p className="mt-1 max-w-2xl text-sm text-gray-500">
-                            Created on {new Date(concept.created_at).toLocaleDateString()}
-                        </p>
-                    </div>
-
-                    {/* Tab Navigation */}
-                    <div className="border-b border-gray-200">
-                        <nav className="-mb-px flex">
-                            <button
-                                onClick={() => setActiveTab('summary')}
-                                className={`${activeTab === 'summary'
-                                    ? 'border-indigo-500 text-indigo-600'
-                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    } whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm`}
-                            >
-                                Summary
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('json')}
-                                className={`${activeTab === 'json'
-                                    ? 'border-indigo-500 text-indigo-600'
-                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    } whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm`}
-                            >
-                                JSON Data
-                            </button>
-                        </nav>
-                    </div>
-
-                    {activeTab === 'summary' && (
-                        <div className="border-t border-gray-200 px-4 py-5 sm:p-0">
-                            <dl className="sm:divide-y sm:divide-gray-200">
-                                {/* Conditional rendering based on available data */}
-                                {templateName && (
-                                    <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt className="text-sm font-medium text-gray-500">Template</dt>
-                                        <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                                            {templateName}
-                                        </dd>
+                        {concept.status === 'pending' && (
+                            <div className="mb-6">
+                                <div className="flex items-center">
+                                    <div className="mr-3">
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
                                     </div>
-                                )}
-
-                                {visualTone && (
-                                    <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt className="text-sm font-medium text-gray-500">Visual Tone</dt>
-                                        <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                                            {visualTone}
-                                        </dd>
-                                    </div>
-                                )}
-
-                                {/* Layout Section */}
-                                {(layoutInfo.primaryElement || Object.keys(layoutInfo).length > 0) && (
-                                    <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt className="text-sm font-medium text-gray-500">Layout</dt>
-                                        <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                                            {layoutInfo.primaryElement && (
-                                                <div className="mb-2">
-                                                    <span className="font-medium">Primary Element:</span> {layoutInfo.primaryElement}
-                                                </div>
-                                            )}
-                                            {layoutInfo.background && (
-                                                <div className="mb-2">
-                                                    <span className="font-medium">Background:</span> {
-                                                        typeof layoutInfo.background === 'string'
-                                                            ? layoutInfo.background
-                                                            : typeof layoutInfo.background === 'object' && layoutInfo.background.type
-                                                                ? layoutInfo.background.type
-                                                                : 'Complex background'
-                                                    }
-                                                </div>
-                                            )}
-                                            {layoutInfo.components && layoutInfo.components.length > 0 && (
-                                                <div>
-                                                    <span className="font-medium">Components:</span>
-                                                    <ul className="mt-1 list-disc list-inside">
-                                                        {layoutInfo.components.map((component: any, index: number) => (
-                                                            <li key={index}>{component.type || component.position || component.style || 'Component'}</li>
-                                                        ))}
-                                                    </ul>
-                                                </div>
-                                            )}
-                                        </dd>
-                                    </div>
-                                )}
-
-                                {/* Components Section (for alternative structure) */}
-                                {components.length > 0 && (
-                                    <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt className="text-sm font-medium text-gray-500">Components</dt>
-                                        <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                                            <ul className="mt-1 list-disc list-inside">
-                                                {components.map((component: any, index: number) => (
-                                                    <li key={index} className="mb-2">
-                                                        <span className="font-medium">{component.type || `Component ${index + 1}`}</span>
-                                                        {component.position && (
-                                                            <span className="text-gray-500"> - {
-                                                                typeof component.position === 'string'
-                                                                    ? component.position
-                                                                    : 'Custom position'
-                                                            }</span>
-                                                        )}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </dd>
-                                    </div>
-                                )}
-
-                                {/* Design Purpose / Goals */}
-                                {(designPurpose.goals || designPurpose.marketing_goals) && (
-                                    <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt className="text-sm font-medium text-gray-500">Goals</dt>
-                                        <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                                            <ul className="mt-1 list-disc list-inside">
-                                                {(designPurpose.goals || designPurpose.marketing_goals || []).map((goal: string, index: number) => (
-                                                    <li key={index}>{goal}</li>
-                                                ))}
-                                            </ul>
-                                        </dd>
-                                    </div>
-                                )}
-
-                                {/* Original Ad Link */}
-                                <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                    <dt className="text-sm font-medium text-gray-500">Original Ad</dt>
-                                    <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                                        <Link
-                                            href={`https://www.facebook.com/ads/library/?id=${concept.ad_archive_id}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="text-indigo-600 hover:text-indigo-500"
-                                        >
-                                            View Original Ad in Facebook Ad Library
-                                        </Link>
-                                    </dd>
+                                    <p className="text-sm text-gray-500">Generating concept...</p>
                                 </div>
-                            </dl>
-                        </div>
-                    )}
+                            </div>
+                        )}
 
-                    {activeTab === 'json' && (
-                        <div className="p-6">
-                            <DynamicJsonViewer data={concept.concept_json} initialOpenDepth={2} />
-                        </div>
-                    )}
-                </div>
+                        {concept.status === 'failed' && concept.error && (
+                            <div className="mb-6 bg-red-50 p-4 rounded-md">
+                                <p className="text-sm text-red-700">{concept.error}</p>
+                            </div>
+                        )}
 
-                <div className="mt-6">
-                    <button
-                        onClick={handleGenerateAd}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                    >
-                        Generate Ad from this Concept
-                    </button>
+                        {concept.status === 'completed' && concept.concept_json && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Summary</h3>
+                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.summary}</p>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Elements</h3>
+                                    <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                        {concept.concept_json.details.elements.map((element, index) => (
+                                            <div key={index} className="bg-gray-50 p-4 rounded-lg">
+                                                <h4 className="text-sm font-medium text-gray-900 capitalize">
+                                                    {element.type.replace(/_/g, ' ')}
+                                                </h4>
+                                                <dl className="mt-2 text-sm text-gray-500">
+                                                    <div>
+                                                        <dt className="inline font-medium">Position: </dt>
+                                                        <dd className="inline">{element.position}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt className="inline font-medium">Purpose: </dt>
+                                                        <dd className="inline">{element.purpose}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt className="inline font-medium">Styling: </dt>
+                                                        <dd className="inline">{element.styling}</dd>
+                                                    </div>
+                                                </dl>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Visual Flow</h3>
+                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.visual_flow}</p>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Visual Tone</h3>
+                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.visual_tone}</p>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Best Practices</h3>
+                                    <ul className="mt-2 list-disc list-inside text-sm text-gray-500">
+                                        {concept.concept_json.details.best_practices.map((practice, index) => (
+                                            <li key={index}>{practice}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Color Palette</h3>
+                                    <dl className="mt-2 text-sm text-gray-500">
+                                        <div>
+                                            <dt className="inline font-medium">Primary: </dt>
+                                            <dd className="inline">{concept.concept_json.details.color_palette.primary}</dd>
+                                        </div>
+                                        <div>
+                                            <dt className="inline font-medium">Secondary: </dt>
+                                            <dd className="inline">{concept.concept_json.details.color_palette.secondary}</dd>
+                                        </div>
+                                        <div>
+                                            <dt className="inline font-medium">Accent: </dt>
+                                            <dd className="inline">{concept.concept_json.details.color_palette.accent}</dd>
+                                        </div>
+                                    </dl>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900">Spacing Strategy</h3>
+                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.spacing_strategy}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="mt-8">
+                            <Link
+                                href="/dashboard"
+                                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                            >
+                                Back to Dashboard
+                            </Link>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

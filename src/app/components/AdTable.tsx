@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 
+
 interface Ad {
     ad_archive_id: string;
     start_date: number;
@@ -21,10 +22,16 @@ interface Ad {
             video_preview_image_url: string | null;
             video_hd_url: string | null;
         }>;
+        images: Array<{
+            resized_image_url: string | null;
+        }>;
     };
     concept?: {
-        id: string;
-        status: 'pending' | 'completed' | 'failed';
+        id: string | null;
+        task_id: string | null;
+        status: 'pending' | 'processing' | 'completed' | 'failed';
+        concept_json?: any;
+        error?: string;
     };
     ad_recipe?: {
         id: string;
@@ -35,12 +42,12 @@ interface Ad {
 interface AdTableProps {
     ads: Ad[];
     adType: 'image' | 'video';
-    selectable?: boolean;
-    onSelectionChange?: (selectedAds: Ad[]) => void;
-    onGenerateConcept?: (adId: string) => void;
-    onGenerateAd?: (adId: string, conceptId: string) => void;
-    conceptsInProgress?: string[];
-    adsInProgress?: string[];
+    selectable: boolean;
+    onSelectionChange: (ads: Ad[]) => void;
+    onGenerateAd: (adId: string, conceptId: string) => Promise<void>;
+    onGenerateConcept: (ad: Ad, imageUrl: string) => Promise<void>;
+    conceptsInProgress: string[];
+    adsInProgress: string[];
 }
 
 function formatDate(timestamp: number): string {
@@ -58,8 +65,8 @@ export default function AdTable({
     adType,
     selectable = false,
     onSelectionChange,
-    onGenerateConcept,
     onGenerateAd,
+    onGenerateConcept,
     conceptsInProgress = [],
     adsInProgress = []
 }: AdTableProps) {
@@ -159,38 +166,54 @@ export default function AdTable({
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                     {ads.map((ad) => {
+                        // Get the first available media URL
                         const mediaUrl = adType === 'video'
-                            ? ad.snapshot.videos?.[0]?.video_preview_image_url
-                            : ad.snapshot.cards?.[0]?.resized_image_url;
+                            ? ad.snapshot?.videos?.[0]?.video_preview_image_url
+                            : (ad.snapshot?.cards?.find(card => card.resized_image_url)?.resized_image_url ||
+                                ad.snapshot?.images?.[0]?.resized_image_url);
+
+                        // Get the link URL (video URL for videos, image URL for images)
                         const mediaLink = adType === 'video'
-                            ? ad.snapshot.videos?.[0]?.video_hd_url
-                            : mediaUrl; // Link to the image itself for image ads
-                        const bodyText = ad.snapshot.cards?.[0]?.body || ad.snapshot.body?.text || 'No text available';
+                            ? ad.snapshot?.videos?.[0]?.video_hd_url || '#'
+                            : mediaUrl || '#';
+
+                        // Get body text from either cards or main body
+                        const bodyText = ad.snapshot?.cards?.find(card => card.body)?.body ||
+                            ad.snapshot?.body?.text ||
+                            'No text available';
+
                         const adLibraryLink = `https://www.facebook.com/ads/library/?id=${ad.ad_archive_id}`;
                         const isSelected = selectedAdIds.includes(ad.ad_archive_id);
                         const isConceptInProgress = conceptsInProgress.includes(ad.ad_archive_id);
                         const isAdInProgress = adsInProgress.includes(ad.ad_archive_id);
 
-                        // Special case handling for ad 486517397763120
-                        if (String(ad.ad_archive_id) === '486517397763120' && !ad.concept) {
-                            ad.concept = {
-                                id: `concept-${ad.ad_archive_id}`,
-                                status: 'completed'
-                            };
-                        }
-
                         // Check if we have concept data
-                        const conceptExists = !!ad.concept || !!(ad as any).concept_json;
+                        const conceptExists = !!ad.concept;
+                        const conceptStatus = ad.concept?.status || null;
+                        const isConceptPending = conceptStatus === 'pending';
+                        const isConceptFailed = conceptStatus === 'failed';
+                        const isGeneratingConcept = conceptsInProgress.includes(ad.ad_archive_id);
 
-                        if (!ad.concept && (ad as any).concept_json) {
-                            ad.concept = {
-                                id: `concept-${ad.ad_archive_id}`,
-                                status: 'completed'
-                            };
-                        }
+                        // Show Generate only if concept doesn't exist or has no data
+                        // AND isn't pending AND isn't failed AND isn't currently generating
+                        const showGenerate = (!conceptExists || !ad.concept?.id) &&
+                            !isConceptPending &&
+                            !isConceptFailed &&
+                            !isGeneratingConcept;
 
                         return (
-                            <tr key={ad.ad_archive_id} className={isSelected && selectable ? "bg-indigo-50" : ""}>
+                            <tr
+                                key={ad.ad_archive_id}
+                                className={isSelected && selectable ? "bg-indigo-50" : ""}
+                                onClick={(e) => {
+                                    // Only prevent default if clicking on the row itself, not on buttons or links
+                                    if (e.target === e.currentTarget) {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        return false;
+                                    }
+                                }}
+                            >
                                 {selectable && (
                                     <td className="px-4 py-4">
                                         <input
@@ -203,14 +226,23 @@ export default function AdTable({
                                 )}
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     {mediaUrl ? (
-                                        <Link href={mediaLink || '#'} target="_blank" rel="noopener noreferrer">
-                                            <Image
-                                                src={mediaUrl}
-                                                alt="Ad Media"
-                                                width={100}
-                                                height={100} // Adjust height as needed, maybe aspect ratio
-                                                className="object-cover rounded"
-                                            />
+                                        <Link href={mediaLink} target="_blank" rel="noopener noreferrer">
+                                            <div className="relative w-[100px] h-[100px]">
+                                                <Image
+                                                    src={mediaUrl}
+                                                    alt="Ad Media"
+                                                    fill
+                                                    className="object-cover rounded"
+                                                />
+                                                {adType === 'video' && (
+                                                    <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 rounded">
+                                                        <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                        </svg>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </Link>
                                     ) : (
                                         <div className="w-[100px] h-[100px] bg-gray-200 rounded flex items-center justify-center text-xs text-gray-500">
@@ -231,27 +263,132 @@ export default function AdTable({
                                         View Ad
                                     </Link>
                                 </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    {ad.concept ? (
-                                        <Link
-                                            href={`/concepts/${ad.concept.id}`}
-                                            className="text-sm text-indigo-600 hover:text-indigo-900"
-                                        >
-                                            View Concept
-                                        </Link>
-                                    ) : isConceptInProgress ? (
-                                        <div className="flex items-center">
-                                            <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-solid border-indigo-600 border-t-transparent"></div>
-                                            <span className="text-sm text-gray-500">Generating...</span>
-                                        </div>
-                                    ) : (
-                                        <button
-                                            onClick={() => onGenerateConcept && onGenerateConcept(ad.ad_archive_id)}
-                                            className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                                        >
-                                            Generate Concept
-                                        </button>
-                                    )}
+                                <td
+                                    className="px-6 py-4 whitespace-nowrap"
+                                    onClick={(e) => {
+                                        // Only prevent default if clicking on the cell itself, not on buttons or links
+                                        if (e.target === e.currentTarget) {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            return false;
+                                        }
+                                    }}
+                                >
+                                    {(() => {
+                                        console.log('Rendering concept cell:', {
+                                            ad_archive_id: ad.ad_archive_id,
+                                            concept_status: ad.concept?.status,
+                                            isGeneratingConcept,
+                                            showGenerate,
+                                            concept: ad.concept
+                                        });
+
+                                        const isProcessing = isGeneratingConcept || (ad.concept && (ad.concept.status === 'pending' || ad.concept.status === 'processing'));
+
+                                        if (isProcessing) {
+                                            return (
+                                                <div className="flex items-center">
+                                                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-solid border-indigo-600 border-t-transparent"></div>
+                                                    <span className="text-sm text-gray-500">Processing...</span>
+                                                </div>
+                                            );
+                                        } else if (ad.concept?.status === 'completed') {
+                                            return (
+                                                <Link
+                                                    href={`/concepts/${ad.concept.id}`}
+                                                    className="text-indigo-600 hover:text-indigo-900"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                    }}
+                                                >
+                                                    View Concept
+                                                </Link>
+                                            );
+                                        } else if (ad.concept?.status === 'failed') {
+                                            return (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        console.log('Retry Generation button clicked');
+                                                        const mediaUrl = adType === 'video'
+                                                            ? ad.snapshot?.videos?.[0]?.video_preview_image_url
+                                                            : (ad.snapshot?.cards?.find(card => card.resized_image_url)?.resized_image_url ||
+                                                                ad.snapshot?.images?.[0]?.resized_image_url);
+
+                                                        console.log('Retry Ad data:', {
+                                                            ad_archive_id: ad.ad_archive_id,
+                                                            adType,
+                                                            mediaUrl,
+                                                            hasVideos: ad.snapshot?.videos?.length,
+                                                            hasCards: ad.snapshot?.cards?.length,
+                                                            hasImages: ad.snapshot?.images?.length,
+                                                            snapshot: ad.snapshot
+                                                        });
+
+                                                        if (!mediaUrl) {
+                                                            console.error('No media URL found for ad:', ad.ad_archive_id);
+                                                            return;
+                                                        }
+
+                                                        if (onGenerateConcept) {
+                                                            console.log('Calling onGenerateConcept for retry with:', {
+                                                                ad_archive_id: ad.ad_archive_id,
+                                                                mediaUrl
+                                                            });
+                                                            onGenerateConcept(ad, mediaUrl);
+                                                        } else {
+                                                            console.error('onGenerateConcept callback is not defined');
+                                                        }
+                                                    }}
+                                                    className="text-indigo-600 hover:text-indigo-900"
+                                                >
+                                                    Retry Generation
+                                                </button>
+                                            );
+                                        } else if (showGenerate) {
+                                            return (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        console.log('Generate Concept button clicked');
+                                                        const mediaUrl = adType === 'video'
+                                                            ? ad.snapshot?.videos?.[0]?.video_preview_image_url
+                                                            : (ad.snapshot?.cards?.find(card => card.resized_image_url)?.resized_image_url ||
+                                                                ad.snapshot?.images?.[0]?.resized_image_url);
+
+                                                        console.log('Ad data:', {
+                                                            ad_archive_id: ad.ad_archive_id,
+                                                            adType,
+                                                            mediaUrl,
+                                                            hasVideos: ad.snapshot?.videos?.length,
+                                                            hasCards: ad.snapshot?.cards?.length,
+                                                            hasImages: ad.snapshot?.images?.length,
+                                                            snapshot: ad.snapshot
+                                                        });
+
+                                                        if (!mediaUrl) {
+                                                            console.error('No media URL found for ad:', ad.ad_archive_id);
+                                                            return;
+                                                        }
+
+                                                        if (onGenerateConcept) {
+                                                            console.log('Calling onGenerateConcept with:', {
+                                                                ad_archive_id: ad.ad_archive_id,
+                                                                mediaUrl
+                                                            });
+                                                            onGenerateConcept(ad, mediaUrl);
+                                                        } else {
+                                                            console.error('onGenerateConcept callback is not defined');
+                                                        }
+                                                    }}
+                                                    className="text-indigo-600 hover:text-indigo-900"
+                                                >
+                                                    Generate Concept
+                                                </button>
+                                            );
+                                        }
+                                        return null;
+                                    })()}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     {ad.ad_recipe ? (
@@ -268,7 +405,11 @@ export default function AdTable({
                                         </div>
                                     ) : (
                                         <button
-                                            onClick={() => ad.concept && onGenerateAd && onGenerateAd(ad.ad_archive_id, ad.concept.id)}
+                                            onClick={() => {
+                                                if (ad.concept?.id && onGenerateAd) {
+                                                    onGenerateAd(ad.ad_archive_id, ad.concept.id);
+                                                }
+                                            }}
                                             disabled={!conceptExists || (ad.concept && ad.concept.status !== 'completed')}
                                             className={`inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md shadow-sm text-white ${!conceptExists || (ad.concept && ad.concept.status !== 'completed')
                                                 ? 'bg-gray-300 cursor-not-allowed'

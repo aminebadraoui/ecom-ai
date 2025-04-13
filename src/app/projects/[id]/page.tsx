@@ -5,6 +5,9 @@ import AdTable from '../../components/AdTable';
 import clsx from 'clsx';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { v4 as uuidv4 } from 'uuid';
+import { toast } from 'react-hot-toast';
+import { supabase } from '../../../lib/supabase';
 
 interface Ad {
     ad_archive_id: string;
@@ -23,10 +26,16 @@ interface Ad {
             video_preview_image_url: string | null;
             video_hd_url: string | null;
         }>;
+        images: Array<{
+            resized_image_url: string | null;
+        }>;
     };
     concept?: {
-        id: string;
+        id: string | null;
+        task_id: string | null;
         status: 'pending' | 'completed' | 'failed';
+        concept_json?: any;
+        error?: string;
     };
     ad_recipe?: {
         id: string;
@@ -38,6 +47,17 @@ type ActiveTab = 'image' | 'video';
 
 interface PageParams {
     id: string;
+}
+
+interface AdTableProps {
+    ads: Ad[];
+    adType: 'image' | 'video';
+    selectable: boolean;
+    onSelectionChange: (ads: Ad[]) => void;
+    onGenerateAd: (adId: string, conceptId: string) => Promise<void>;
+    onGenerateConcept: (ad: Ad, imageUrl: string) => Promise<void>;
+    conceptsInProgress: string[];
+    adsInProgress: string[];
 }
 
 export default function ProjectPage({ params }: { params: PageParams }) {
@@ -58,6 +78,7 @@ export default function ProjectPage({ params }: { params: PageParams }) {
     const [language, setLanguage] = useState('');
     const [conceptsInProgress, setConceptsInProgress] = useState<string[]>([]);
     const [adsInProgress, setAdsInProgress] = useState<string[]>([]);
+    const [showConceptGenerator, setShowConceptGenerator] = useState(false);
 
     // Load workflow data from API on mount
     useEffect(() => {
@@ -80,65 +101,82 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                 if (data.workflow) {
                     setWorkflowName(data.workflow.name);
 
-                    // Normalize the concepts in the ads to ensure proper status
-                    const normalizedAds = (data.workflow.ads || []).map((ad: Ad) => {
-                        // Special case handling for specific ad ID
-                        if (String(ad.ad_archive_id) === '486517397763120' && !ad.concept) {
-                            ad.concept = {
-                                id: `concept-${ad.ad_archive_id}`,
-                                status: 'completed' as 'pending' | 'completed' | 'failed'
-                            };
-                        }
+                    // Fetch concepts for all ads
+                    const adArchiveIds = data.workflow.ads.map((ad: Ad) => ad.ad_archive_id);
 
-                        // If concept_json exists, create a concept property
-                        if ((ad as any).concept_json && !ad.concept) {
-                            ad.concept = {
-                                id: `concept-${ad.ad_archive_id}`,
-                                status: 'completed' as 'pending' | 'completed' | 'failed'
-                            };
-                        }
+                    const { data: concepts, error } = await supabase
+                        .from('ad_concepts')
+                        .select('*')
+                        .in('ad_archive_id', adArchiveIds);
 
-                        // Ensure any concept has a valid status
-                        if (ad.concept) {
-                            ad.concept.status = 'completed';
-                        }
+                    if (error) {
+                        console.error('Error fetching concepts:', error);
+                    } else {
+                        // Map concepts to their respective ads
+                        const adsWithConcepts = data.workflow.ads.map((ad: Ad) => {
+                            const concept = concepts?.find(c => c.ad_archive_id === ad.ad_archive_id);
+                            return concept ? {
+                                ...ad,
+                                concept: {
+                                    id: concept.id,
+                                    task_id: concept.task_id,
+                                    status: concept.status,
+                                    concept_json: concept.concept_json,
+                                    error: concept.error
+                                }
+                            } : ad;
+                        });
 
-                        return ad;
-                    });
-
-                    setAds(normalizedAds);
+                        setAds(adsWithConcepts || []);
+                    }
                 }
             } catch (err) {
                 console.error('Error fetching workflow:', err);
                 setError(err instanceof Error ? err.message : 'Failed to load workflow');
-            } finally {
-                setIsLoading(false);
             }
+            setIsLoading(false);
         };
 
         fetchWorkflow();
     }, [id, router]);
 
-    const filteredAds = useMemo(() => {
-        if (activeTab === 'image') {
-            return ads.filter(ad =>
-                (ad.snapshot?.videos === null || ad.snapshot?.videos?.length === 0) &&
-                ad.snapshot?.cards?.[0]?.resized_image_url
-            );
-        } else {
-            return ads.filter(ad => ad.snapshot?.videos?.length > 0);
+    const handleGenerateConcept = async (ad: Ad, imageUrl: string) => {
+        console.log('handleGenerateConcept called with:', {
+            ad_archive_id: ad.ad_archive_id,
+            imageUrl,
+            adType: activeTab,
+            adSnapshot: ad.snapshot
+        });
+
+        if (!imageUrl) {
+            console.error('imageUrl is undefined or empty');
+            toast.error('No image URL available for this ad');
+            return;
         }
-    }, [ads, activeTab]);
 
-    const handleSelectionChange = (newSelectedAds: Ad[]) => {
-        setSelectedAds(newSelectedAds);
-    };
-
-    const handleGenerateConcept = async (adId: string) => {
         try {
+            console.log('Starting concept generation for ad:', {
+                ad_archive_id: ad.ad_archive_id,
+                image_url: imageUrl
+            });
+
             // Add to in-progress list
-            setConceptsInProgress(prev => [...prev, adId]);
+            setConceptsInProgress(prev => [...prev, ad.ad_archive_id]);
             setError(null);
+
+            // First, clear any existing concept data for this ad
+            setAds(prevAds => prevAds.map(a => {
+                if (a.ad_archive_id === ad.ad_archive_id) {
+                    const { concept, ...rest } = a;
+                    return rest;
+                }
+                return a;
+            }));
+
+            console.log('Sending POST request to /api/ad-concepts with:', {
+                ad_archive_id: ad.ad_archive_id,
+                image_url: imageUrl
+            });
 
             const response = await fetch('/api/ad-concepts', {
                 method: 'POST',
@@ -146,57 +184,185 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    adIds: [adId],
+                    ad_archive_id: ad.ad_archive_id,
+                    image_url: imageUrl
                 }),
+                // Include credentials to send cookies
+                credentials: 'include'
             });
 
             if (!response.ok) {
-                throw new Error('Failed to generate concept');
+                const errorData = await response.json();
+                console.error('Error response from API:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    error: errorData
+                });
+
+                if (response.status === 401) {
+                    toast.error('Please log in to generate concepts');
+                    router.push('/login');
+                    return;
+                }
+
+                toast.error(`Error generating concept: ${errorData.error || response.statusText}`);
+                setAds(prevAds => prevAds.map(a => {
+                    if (a.ad_archive_id === ad.ad_archive_id) {
+                        return {
+                            ...a,
+                            concept: {
+                                id: null,
+                                task_id: null,
+                                status: 'failed' as const,
+                                error: errorData.error || response.statusText
+                            }
+                        };
+                    }
+                    return a;
+                }));
+                return;
             }
 
-            const data = await response.json();
+            const responseData = await response.json();
+            console.log('Received concept data from API:', responseData);
 
-            // Update the ads list with the new concept
-            setAds(prevAds => prevAds.map(ad => {
-                if (ad.ad_archive_id === adId) {
-                    const concept = data.concepts.find((c: any) => c.ad_archive_id === adId);
-
-                    // Create a properly formatted concept object
-                    const normalizedConcept = concept ? {
-                        id: String(concept.id || 'generated-concept-id'),
-                        status: 'completed' as const
-                    } : undefined;
-
+            // Update the ad with the new concept data
+            setAds(prevAds => prevAds.map(a => {
+                if (a.ad_archive_id === ad.ad_archive_id) {
                     return {
-                        ...ad,
-                        concept: normalizedConcept
-                    };
-                }
-                return ad;
-            }));
-
-            setSuccess(`Concept for ad ${adId} generated successfully!`);
-        } catch (err) {
-            console.error('Error generating concept:', err);
-            setError(err instanceof Error ? err.message : 'Failed to generate concept');
-
-            // Update the ad with failed status
-            setAds(prevAds => prevAds.map(ad => {
-                if (ad.ad_archive_id === adId) {
-                    return {
-                        ...ad,
+                        ...a,
                         concept: {
-                            id: 'failed',
-                            status: 'failed' as const
+                            id: responseData.id,
+                            task_id: responseData.task_id,
+                            status: responseData.status,
                         }
                     };
                 }
-                return ad;
+                return a;
             }));
-        } finally {
+
+            // Set up SSE connection to our internal API
+            console.log('Setting up SSE connection to:', responseData.sse_url);
+            const eventSource = new EventSource(responseData.sse_url, {
+                withCredentials: true // Include cookies in the SSE request
+            });
+
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received SSE update:', data);
+
+                // Update the ad with the completed concept data
+                setAds(prevAds => prevAds.map(a => {
+                    if (a.ad_archive_id === ad.ad_archive_id) {
+                        return {
+                            ...a,
+                            concept: {
+                                id: data.id,
+                                task_id: data.task_id,
+                                status: data.status,
+                                concept_json: data.concept_json,
+                                error: data.error
+                            }
+                        };
+                    }
+                    return a;
+                }));
+
+                // Remove from in-progress list
+                setConceptsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
+
+                if (data.status === 'completed') {
+                    setSuccess(`Concept for ad ${ad.ad_archive_id} generated successfully!`);
+                    eventSource.close();
+                } else if (data.status === 'failed') {
+                    setError(`Failed to generate concept for ad ${ad.ad_archive_id}: ${data.error || 'Unknown error'}`);
+                    eventSource.close();
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE Error:', error);
+                eventSource.close();
+
+                // Update the concept status to failed
+                setAds(prevAds => prevAds.map(a => {
+                    if (a.ad_archive_id === ad.ad_archive_id) {
+                        return {
+                            ...a,
+                            concept: {
+                                id: responseData.id,
+                                task_id: responseData.task_id,
+                                status: 'failed' as const,
+                                error: 'Connection error'
+                            }
+                        };
+                    }
+                    return a;
+                }));
+
+                // Remove from in-progress list
+                setConceptsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
+                setError(`Failed to generate concept for ad ${ad.ad_archive_id}: Connection error`);
+            };
+
+            // Add event listener for when the connection is opened
+            eventSource.onopen = () => {
+                console.log('SSE connection opened');
+            };
+        } catch (err) {
+            console.error('Error in handleGenerateConcept:', err);
+            setError(err instanceof Error ? err.message : 'Failed to generate concept');
+
             // Remove from in-progress list
-            setConceptsInProgress(prev => prev.filter(id => id !== adId));
+            setConceptsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
         }
+    };
+
+    const filteredAds = useMemo(() => {
+        console.log('Filtering ads:', { total: ads.length, activeTab });
+        if (activeTab === 'image') {
+            const imageAds = ads.filter(ad => {
+                const hasImageCard = ad.snapshot?.cards?.some(card => {
+                    console.log('Checking card:', {
+                        ad_archive_id: ad.ad_archive_id,
+                        card_image_url: card.resized_image_url
+                    });
+                    return card.resized_image_url;
+                }) ||
+                    ad.snapshot?.images?.some(image => {
+                        console.log('Checking image:', {
+                            ad_archive_id: ad.ad_archive_id,
+                            image_url: image.resized_image_url
+                        });
+                        return image.resized_image_url;
+                    });
+                console.log('Ad filtering:', {
+                    id: ad.ad_archive_id,
+                    hasImageCard,
+                    cards: ad.snapshot?.cards,
+                    images: ad.snapshot?.images
+                });
+                return hasImageCard;
+            });
+            console.log('Found image ads:', imageAds.length);
+            return imageAds;
+        } else {
+            const videoAds = ads.filter(ad => {
+                const hasVideos = ad.snapshot?.videos && ad.snapshot.videos.length > 0;
+                console.log('Ad filtering:', {
+                    id: ad.ad_archive_id,
+                    hasVideos,
+                    videos: ad.snapshot?.videos
+                });
+                return hasVideos;
+            });
+            console.log('Found video ads:', videoAds.length);
+            return videoAds;
+        }
+    }, [ads, activeTab]);
+
+    const handleSelectionChange = (newSelectedAds: any[]) => {
+        setSelectedAds(newSelectedAds);
     };
 
     const handleGenerateAd = async (adId: string, conceptId: string) => {
@@ -272,7 +438,13 @@ export default function ProjectPage({ params }: { params: PageParams }) {
         }
     };
 
-    const handleExtractConcepts = async () => {
+    const handleExtractConcepts = async (e: React.MouseEvent<HTMLButtonElement> | React.FormEvent | undefined) => {
+        // Prevent any navigation
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
         if (selectedAds.length === 0) {
             setError('Please select at least one ad to analyze');
             return;
@@ -283,15 +455,15 @@ export default function ProjectPage({ params }: { params: PageParams }) {
         setSuccess(null);
 
         try {
-            // This will be implemented with a real API call in a moment
-            // For now, we'll just simulate success
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            // Instead of redirecting, process the ads directly here
+            const adIds = selectedAds.map(ad => ad.ad_archive_id);
+            console.log(`Processing ${adIds.length} ads for concept extraction`);
 
-            // Redirect to product selection after successful extraction
-            router.push(`/ad-creation?ads=${selectedAds.map(ad => ad.ad_archive_id).join(',')}`);
+            // Show the ConceptGenerator for the selected ads
+            setShowConceptGenerator(true);
         } catch (err) {
-            console.error('Error analyzing ads:', err);
-            setError(err instanceof Error ? err.message : 'Failed to analyze ads');
+            console.error('Error preparing to analyze ads:', err);
+            setError(err instanceof Error ? err.message : 'Failed to prepare ad analysis');
             setIsAnalyzing(false);
         }
     };
@@ -321,7 +493,6 @@ export default function ProjectPage({ params }: { params: PageParams }) {
             }
 
             const data = await response.json();
-            setAds(data.ads);
 
             // Update workflow via API
             const updateResponse = await fetch(`/api/workflows/${id}`, {
@@ -338,7 +509,9 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                 throw new Error('Failed to update workflow');
             }
 
-            setSuccess('Ads fetched successfully!');
+            const updatedData = await updateResponse.json();
+            setAds(updatedData.workflow.ads || []);
+            setSuccess('Ads fetched and workflow updated successfully!');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'An error occurred');
         } finally {
@@ -457,7 +630,7 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                                 'whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm'
                             )}
                         >
-                            Image Ads ({ads.filter(ad => (ad.snapshot?.videos === null || ad.snapshot?.videos?.length === 0) && ad.snapshot?.cards?.[0]?.resized_image_url).length})
+                            Image Ads ({ads.filter(ad => !ad.snapshot?.videos || ad.snapshot.videos.length === 0 || ad.snapshot?.cards?.some(card => card.resized_image_url)).length})
                         </button>
                         <button
                             onClick={() => setActiveTab('video')}
@@ -468,10 +641,16 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                                 'whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm'
                             )}
                         >
-                            Video Ads ({ads.filter(ad => ad.snapshot?.videos?.length > 0).length})
+                            Video Ads ({ads.filter(ad => ad.snapshot?.videos && ad.snapshot.videos.length > 0).length})
                         </button>
                     </nav>
                 </div>
+
+                {showConceptGenerator && selectedAds.length > 0 && (
+                    <div className="mb-6">
+                        {/* Concept generator component */}
+                    </div>
+                )}
 
                 <div className="mt-6 bg-white shadow overflow-hidden sm:rounded-lg">
                     <AdTable
@@ -479,8 +658,8 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                         adType={activeTab}
                         selectable={true}
                         onSelectionChange={handleSelectionChange}
-                        onGenerateConcept={handleGenerateConcept}
                         onGenerateAd={handleGenerateAd}
+                        onGenerateConcept={handleGenerateConcept}
                         conceptsInProgress={conceptsInProgress}
                         adsInProgress={adsInProgress}
                     />

@@ -137,7 +137,7 @@ export default function DashboardPage() {
                                         <div className="flex items-center justify-between">
                                             <div className="flex flex-col">
                                                 <Link
-                                                    href={`/workflows/${workflow.id}`}
+                                                    href={`/projects/${workflow.id}`}
                                                     className="text-indigo-600 hover:text-indigo-900 font-medium"
                                                 >
                                                     {workflow.name}
@@ -148,16 +148,10 @@ export default function DashboardPage() {
                                             </div>
                                             <div className="flex">
                                                 <Link
-                                                    href={`/workflows/${workflow.id}`}
+                                                    href={`/projects/${workflow.id}`}
                                                     className="mr-2 inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                                                 >
                                                     View
-                                                </Link>
-                                                <Link
-                                                    href={`/projects/${workflow.id}`}
-                                                    className="mr-2 inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                                                >
-                                                    Edit
                                                 </Link>
                                                 <button
                                                     onClick={() => handleDeleteWorkflow(workflow.id)}
