@@ -10,6 +10,17 @@ const nextConfig = {
             }
         ],
     },
+    experimental: {
+        allowedRevalidateHeaderKeys: ['*'],
+    },
+    async rewrites() {
+        return [
+            {
+                source: '/api/:path*',
+                destination: process.env.EXTERNAL_API_URL + '/api/:path*',
+            },
+        ];
+    },
 }
 
 module.exports = nextConfig 

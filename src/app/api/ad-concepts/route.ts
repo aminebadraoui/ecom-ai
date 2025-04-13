@@ -3,6 +3,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { supabaseAdmin } from '../../../lib/supabase-admin';
 import { getUser } from '../../../lib/auth';
 import { cookies } from 'next/headers';
+import http from 'http';
+import https from 'https';
+
+interface ApiResponse {
+    ok: boolean;
+    status: number;
+    data: string;
+}
 
 export async function POST(request: Request) {
     try {
@@ -40,40 +48,90 @@ export async function POST(request: Request) {
 
         // Call external API
         const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
+        const url = new URL(`${externalApiUrl}/api/v1/extract-ad-concept`);
+
         console.log('External API Configuration:', {
             EXTERNAL_API_URL: process.env.EXTERNAL_API_URL,
             NEXT_PUBLIC_EXTERNAL_API_URL: process.env.NEXT_PUBLIC_EXTERNAL_API_URL,
             using: externalApiUrl,
-            fullUrl: `${externalApiUrl}/api/v1/extract-ad-concept`,
+            fullUrl: url.toString(),
             method: 'POST',
-            imageUrl: image_url
+            imageUrl: image_url,
+            hostname: url.hostname,
+            port: url.port || '80',
+            protocol: url.protocol
         });
 
-        const response = await fetch(`${externalApiUrl}/api/v1/extract-ad-concept`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+        // Create a promise to handle the HTTP request
+        const response = await new Promise<ApiResponse>((resolve, reject) => {
+            const postData = JSON.stringify({
                 image_url,
                 type: 'ad_concept'
-            }),
+            });
+
+            const options = {
+                hostname: url.hostname,
+                port: url.port || '3006',
+                path: url.pathname,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(postData)
+                },
+                rejectUnauthorized: false, // Allow insecure HTTP
+                insecure: true // Allow insecure HTTP
+            };
+
+            console.log('Making request with options:', options);
+
+            const req = http.request(options, (res) => {
+                let data = '';
+
+                res.on('data', (chunk) => {
+                    data += chunk;
+                });
+
+                res.on('end', () => {
+                    console.log('Response received:', {
+                        statusCode: res.statusCode,
+                        headers: res.headers,
+                        data: data
+                    });
+                    resolve({
+                        ok: res.statusCode === 200,
+                        status: res.statusCode || 500,
+                        data
+                    });
+                });
+            });
+
+            req.on('error', (error) => {
+                console.error('Request error:', error);
+                reject(error);
+            });
+
+            req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('Request timed out'));
+            });
+
+            req.setTimeout(30000); // 30 second timeout
+            req.write(postData);
+            req.end();
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
             console.error('External API error:', {
                 status: response.status,
-                statusText: response.statusText,
-                error: errorText
+                data: response.data
             });
             return NextResponse.json(
-                { error: `External API error: ${response.statusText}. ${errorText}` },
+                { error: `External API error: ${response.data}` },
                 { status: response.status }
             );
         }
 
-        const responseData = await response.json();
+        const responseData = JSON.parse(response.data);
         console.log('External API response:', responseData);
         const { task_id } = responseData;
 
