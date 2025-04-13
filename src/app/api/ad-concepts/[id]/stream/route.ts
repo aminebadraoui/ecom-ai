@@ -78,8 +78,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
             };
 
             try {
-                // Connect to the external API's SSE endpoint
-                const externalApiUrl = process.env.NEXT_PUBLIC_EXTERNAL_API_URL || 'http://localhost:3006';
+                // Connect to external API's SSE endpoint
+                const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
+                console.log('Using external API URL for SSE:', externalApiUrl);
                 const response = await fetch(`${externalApiUrl}/api/v1/tasks/${concept.task_id}/stream`);
                 console.log('Connected to external API stream');
 

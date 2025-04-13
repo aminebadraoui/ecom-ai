@@ -39,7 +39,8 @@ export async function POST(request: Request) {
         console.log('Calling external API with image_url:', image_url);
 
         // Call external API
-        const externalApiUrl = process.env.NEXT_PUBLIC_EXTERNAL_API_URL || 'http://localhost:3006';
+        const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
+        console.log('Using external API URL:', externalApiUrl);
         const response = await fetch(`${externalApiUrl}/api/v1/extract-ad-concept`, {
             method: 'POST',
             headers: {
@@ -204,7 +205,7 @@ export async function GET(request: Request) {
                 })}\n\n`));
 
                 // Connect to external API's SSE endpoint
-                const externalApiUrl = process.env.NEXT_PUBLIC_EXTERNAL_API_URL || 'http://localhost:3006';
+                const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
                 const response = await fetch(`${externalApiUrl}/api/v1/tasks/${concept.task_id}/stream`);
                 const reader = response.body?.getReader();
 
