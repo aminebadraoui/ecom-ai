@@ -5,6 +5,44 @@ import { headers } from 'next/headers';
 export const dynamic = 'force-dynamic';
 export const runtime = 'edge';
 
+// Helper function to safely enqueue data
+const safeEnqueue = (controller: ReadableStreamDefaultController, encoder: TextEncoder, isStreamClosed: boolean, data: string) => {
+    if (!isStreamClosed) {
+        try {
+            controller.enqueue(encoder.encode(data));
+        } catch (err) {
+            console.warn('Failed to enqueue data:', err);
+        }
+    }
+};
+
+// Helper function to update Supabase
+const updateSupabase = async (conceptId: string, status: string, data: any = null, error: string | null = null) => {
+    try {
+        const updateData: any = {
+            status,
+            updated_at: new Date().toISOString()
+        };
+
+        if (data) {
+            updateData.concept_json = data;
+        }
+
+        const { error: updateError } = await supabaseAdmin
+            .from('ad_concepts')
+            .update(updateData)
+            .eq('id', conceptId);
+
+        if (updateError) {
+            console.error('Error updating concept:', updateError);
+        } else {
+            console.log('Successfully updated concept in Supabase');
+        }
+    } catch (err) {
+        console.error('Error updating Supabase:', err);
+    }
+};
+
 export async function GET(request: Request, { params }: { params: { id: string } }) {
     const conceptId = params.id;
     console.log('SSE connection requested for concept:', conceptId);
@@ -39,47 +77,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
         async start(controller) {
             console.log('Starting SSE stream for concept:', conceptId);
 
-            // Helper function to safely enqueue data
-            const safeEnqueue = (data: string) => {
-                if (!isStreamClosed) {
-                    try {
-                        controller.enqueue(encoder.encode(data));
-                    } catch (err) {
-                        console.warn('Failed to enqueue data:', err);
-                    }
-                }
-            };
-
-            // Helper function to update Supabase
-            const updateSupabase = async (status: string, data: any = null, error: string | null = null) => {
-                try {
-                    const updateData: any = {
-                        status,
-                        updated_at: new Date().toISOString()
-                    };
-
-                    if (data) {
-                        updateData.concept_json = data;
-                    }
-
-                    const { error: updateError } = await supabaseAdmin
-                        .from('ad_concepts')
-                        .update(updateData)
-                        .eq('id', conceptId);
-
-                    if (updateError) {
-                        console.error('Error updating concept:', updateError);
-                    } else {
-                        console.log('Successfully updated concept in Supabase');
-                    }
-                } catch (err) {
-                    console.error('Error updating Supabase:', err);
-                }
-            };
-
             try {
                 // Connect to external API's SSE endpoint
-                const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
+                const externalApiUrl = process.env.NEXT_PUBLIC_EXTERNAL_API_URL || 'http://localhost:3006';
                 console.log('External API SSE Configuration:', {
                     EXTERNAL_API_URL: process.env.EXTERNAL_API_URL,
                     NEXT_PUBLIC_EXTERNAL_API_URL: process.env.NEXT_PUBLIC_EXTERNAL_API_URL,
@@ -127,7 +127,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
                                 // Update Supabase if the status is final
                                 if (data.status === 'completed' || data.status === 'failed') {
-                                    await updateSupabase(data.status, data.result, data.error);
+                                    await updateSupabase(conceptId, data.status, data.result, data.error);
                                 }
 
                                 // Send the update to the client
@@ -138,7 +138,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
                                     concept_json: data.result,
                                     error: data.error
                                 })}\n\n`;
-                                safeEnqueue(event);
+                                safeEnqueue(controller, encoder, isStreamClosed, event);
 
                                 // Close the stream if we receive a final status
                                 if (data.status === 'completed' || data.status === 'failed') {
@@ -155,7 +155,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
                 console.error('Error in SSE stream:', err);
 
                 // Update concept status to failed
-                await updateSupabase('failed', null, err instanceof Error ? err.message : 'Unknown error');
+                await updateSupabase(conceptId, 'failed', null, err instanceof Error ? err.message : 'Unknown error');
 
                 // Send error to client
                 const event = `data: ${JSON.stringify({
@@ -164,7 +164,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
                     status: 'failed',
                     error: err instanceof Error ? err.message : 'Unknown error'
                 })}\n\n`;
-                safeEnqueue(event);
+                safeEnqueue(controller, encoder, isStreamClosed, event);
             } finally {
                 isStreamClosed = true;
                 try {

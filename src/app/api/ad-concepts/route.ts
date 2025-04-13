@@ -3,13 +3,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { supabaseAdmin } from '../../../lib/supabase-admin';
 import { getUser } from '../../../lib/auth';
 import { cookies } from 'next/headers';
-import http from 'http';
-import https from 'https';
+import { RequestInit } from 'node-fetch';
+import { Database } from '@/lib/database.types';
 
-interface ApiResponse {
-    ok: boolean;
-    status: number;
-    data: string;
+// Type definition for external API response
+interface ExternalApiResponse {
+    task_id: string;
+    status: string;
+    [key: string]: any; // Allow for additional properties
 }
 
 export async function POST(request: Request) {
@@ -44,145 +45,112 @@ export async function POST(request: Request) {
         const userId = user.id;
         console.log('User ID from cookie:', userId);
 
-        console.log('Calling external API with image_url:', image_url);
-
         // Call external API
-        const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
-        const url = new URL(`${externalApiUrl}/api/v1/extract-ad-concept`);
-
+        const externalApiUrl = process.env.NEXT_PUBLIC_EXTERNAL_API_URL || 'http://localhost:3006';
         console.log('External API Configuration:', {
-            EXTERNAL_API_URL: process.env.EXTERNAL_API_URL,
             NEXT_PUBLIC_EXTERNAL_API_URL: process.env.NEXT_PUBLIC_EXTERNAL_API_URL,
             using: externalApiUrl,
-            fullUrl: url.toString(),
-            method: 'POST',
-            imageUrl: image_url,
-            hostname: url.hostname,
-            port: url.port || '80',
-            protocol: url.protocol
+            fullUrl: `${externalApiUrl}/api/v1/extract-ad-concept`
         });
 
-        // Create a promise to handle the HTTP request
-        const response = await new Promise<ApiResponse>((resolve, reject) => {
-            const postData = JSON.stringify({
+        try {
+            console.log('Attempting to fetch from external API...');
+
+            // Dynamically import node-fetch
+            const { default: nodeFetch } = await import('node-fetch');
+
+            const requestBody = {
                 image_url,
                 type: 'ad_concept'
-            });
+            };
 
-            const options = {
-                hostname: url.hostname,
-                port: url.port || '3006',
-                path: url.pathname,
+            const response = await nodeFetch(`${externalApiUrl}/api/v1/extract-ad-concept`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(postData)
                 },
-                rejectUnauthorized: false, // Allow insecure HTTP
-                insecure: true // Allow insecure HTTP
-            };
+                body: JSON.stringify(requestBody),
+                // @ts-ignore timeout is a valid option in node-fetch
+                timeout: 10000
+            } as RequestInit);
 
-            console.log('Making request with options:', options);
+            console.log('Fetch completed. Response status:', response.status);
 
-            const req = http.request(options, (res) => {
-                let data = '';
-
-                res.on('data', (chunk) => {
-                    data += chunk;
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('External API error:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    error: errorText,
+                    headers: Object.fromEntries(response.headers)
                 });
+                return NextResponse.json(
+                    { error: `External API error: ${response.statusText}. ${errorText}` },
+                    { status: response.status }
+                );
+            }
 
-                res.on('end', () => {
-                    console.log('Response received:', {
-                        statusCode: res.statusCode,
-                        headers: res.headers,
-                        data: data
-                    });
-                    resolve({
-                        ok: res.statusCode === 200,
-                        status: res.statusCode || 500,
-                        data
-                    });
-                });
-            });
+            const responseData = await response.json() as ExternalApiResponse;
+            console.log('External API response:', responseData);
+            const { task_id } = responseData;
 
-            req.on('error', (error) => {
-                console.error('Request error:', error);
-                reject(error);
-            });
-
-            req.on('timeout', () => {
-                req.destroy();
-                reject(new Error('Request timed out'));
-            });
-
-            req.setTimeout(30000); // 30 second timeout
-            req.write(postData);
-            req.end();
-        });
-
-        if (!response.ok) {
-            console.error('External API error:', {
-                status: response.status,
-                data: response.data
-            });
-            return NextResponse.json(
-                { error: `External API error: ${response.data}` },
-                { status: response.status }
-            );
-        }
-
-        const responseData = JSON.parse(response.data);
-        console.log('External API response:', responseData);
-        const { task_id } = responseData;
-
-        // Create a new concept entry in Supabase
-        const conceptId = uuidv4();
-        console.log('Creating concept in Supabase:', {
-            id: conceptId,
-            user_id: userId,
-            ad_archive_id,
-            task_id,
-            status: 'pending'
-        });
-
-        const { data: concept, error: insertError } = await supabaseAdmin
-            .from('ad_concepts')
-            .insert({
+            // Create a new concept entry in Supabase
+            const conceptId = uuidv4();
+            console.log('Creating concept in Supabase:', {
                 id: conceptId,
                 user_id: userId,
                 ad_archive_id,
                 task_id,
+                status: 'pending'
+            });
+
+            const { data: concept, error: insertError } = await supabaseAdmin
+                .from('ad_concepts')
+                .insert({
+                    id: conceptId,
+                    user_id: userId,
+                    ad_archive_id,
+                    task_id,
+                    status: 'pending',
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                    concept_json: {}
+                })
+                .select()
+                .single();
+
+            if (insertError) {
+                console.error('Supabase insert error:', insertError);
+                return NextResponse.json(
+                    { error: 'Failed to create concept' },
+                    { status: 500 }
+                );
+            }
+
+            console.log('Successfully created concept:', concept);
+
+            // Return the concept ID and task ID for the frontend to connect to SSE
+            const responsePayload = {
+                id: conceptId,
+                task_id: task_id,
                 status: 'pending',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                concept_json: {}
-            })
-            .select()
-            .single();
-
-        if (insertError) {
-            console.error('Supabase insert error:', insertError);
-            return NextResponse.json(
-                { error: 'Failed to create concept' },
-                { status: 500 }
-            );
+                sse_url: `/api/ad-concepts/${conceptId}/stream`
+            };
+            console.log('Returning response:', responsePayload);
+            return NextResponse.json(responsePayload);
+        } catch (error: any) {
+            console.error('Fetch error details:', {
+                name: error?.name,
+                message: error?.message,
+                cause: error?.cause,
+                stack: error?.stack
+            });
+            throw error;
         }
-
-        console.log('Successfully created concept:', concept);
-
-        // Return the concept ID and task ID for the frontend to connect to SSE
-        const responsePayload = {
-            id: conceptId,
-            task_id: task_id,
-            status: 'pending',
-            sse_url: `/api/ad-concepts/${conceptId}/stream`
-        };
-        console.log('Returning response:', responsePayload);
-        return NextResponse.json(responsePayload);
-    } catch (err) {
+    } catch (err: any) {
         console.error('Error in concept generation:', err);
         return NextResponse.json(
-            { error: 'Internal server error' },
+            { error: err?.message || 'Internal server error' },
             { status: 500 }
         );
     }
@@ -271,7 +239,7 @@ export async function GET(request: Request) {
                 })}\n\n`));
 
                 // Connect to external API's SSE endpoint
-                const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
+                const externalApiUrl = process.env.NEXT_PUBLIC_EXTERNAL_API_URL || 'http://localhost:3006';
                 const response = await fetch(`${externalApiUrl}/api/v1/tasks/${concept.task_id}/stream`);
                 const reader = response.body?.getReader();
 
