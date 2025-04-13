@@ -40,7 +40,15 @@ export async function POST(request: Request) {
 
         // Call external API
         const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
-        console.log('Using external API URL:', externalApiUrl);
+        console.log('External API Configuration:', {
+            EXTERNAL_API_URL: process.env.EXTERNAL_API_URL,
+            NEXT_PUBLIC_EXTERNAL_API_URL: process.env.NEXT_PUBLIC_EXTERNAL_API_URL,
+            using: externalApiUrl,
+            fullUrl: `${externalApiUrl}/api/v1/extract-ad-concept`,
+            method: 'POST',
+            imageUrl: image_url
+        });
+
         const response = await fetch(`${externalApiUrl}/api/v1/extract-ad-concept`, {
             method: 'POST',
             headers: {

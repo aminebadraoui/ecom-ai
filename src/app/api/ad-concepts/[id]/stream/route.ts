@@ -80,12 +80,25 @@ export async function GET(request: Request, { params }: { params: { id: string }
             try {
                 // Connect to external API's SSE endpoint
                 const externalApiUrl = process.env.EXTERNAL_API_URL || 'http://localhost:3006';
-                console.log('Using external API URL for SSE:', externalApiUrl);
+                console.log('External API SSE Configuration:', {
+                    EXTERNAL_API_URL: process.env.EXTERNAL_API_URL,
+                    NEXT_PUBLIC_EXTERNAL_API_URL: process.env.NEXT_PUBLIC_EXTERNAL_API_URL,
+                    using: externalApiUrl,
+                    fullUrl: `${externalApiUrl}/api/v1/tasks/${concept.task_id}/stream`,
+                    conceptId,
+                    taskId: concept.task_id
+                });
+
                 const response = await fetch(`${externalApiUrl}/api/v1/tasks/${concept.task_id}/stream`);
-                console.log('Connected to external API stream');
+                console.log('SSE connection response:', {
+                    status: response.status,
+                    ok: response.ok,
+                    statusText: response.statusText,
+                    headers: Object.fromEntries(response.headers.entries())
+                });
 
                 if (!response.ok) {
-                    throw new Error('Failed to connect to task stream');
+                    throw new Error(`Failed to connect to task stream: ${response.status} ${response.statusText}`);
                 }
 
                 const reader = response.body?.getReader();
