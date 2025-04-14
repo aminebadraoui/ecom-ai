@@ -12,26 +12,10 @@ interface ConceptDetails {
     concept_json: {
         title: string;
         summary: string;
-        details: {
-            elements: Array<{
-                type: string;
-                position: string;
-                purpose: string;
-                styling: string;
-            }>;
-            visual_flow: string;
-            visual_tone: string;
-            best_practices: string[];
-            color_palette: {
-                primary: string;
-                secondary: string;
-                accent: string;
-            };
-            spacing_strategy: string;
-        };
+        details: Record<string, any>;
     };
     task_id: string;
-    status: 'pending' | 'completed' | 'failed';
+    status: 'pending' | 'processing' | 'completed' | 'failed';
     created_at: string;
     updated_at: string;
     error?: string;
@@ -148,8 +132,8 @@ export default function ConceptPage({ params }: { params: { id: string } }) {
                                 {concept.concept_json?.title || 'Ad Concept'}
                             </h1>
                             <span className={`px-3 py-1 rounded-full text-sm font-medium ${concept.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                    concept.status === 'failed' ? 'bg-red-100 text-red-800' :
-                                        'bg-yellow-100 text-yellow-800'
+                                concept.status === 'failed' ? 'bg-red-100 text-red-800' :
+                                    'bg-yellow-100 text-yellow-800'
                                 }`}>
                                 {concept.status.charAt(0).toUpperCase() + concept.status.slice(1)}
                             </span>
@@ -179,83 +163,107 @@ export default function ConceptPage({ params }: { params: { id: string } }) {
                                     <p className="mt-2 text-sm text-gray-500">{concept.concept_json.summary}</p>
                                 </div>
 
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900">Elements</h3>
-                                    <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                        {concept.concept_json.details.elements.map((element, index) => (
-                                            <div key={index} className="bg-gray-50 p-4 rounded-lg">
-                                                <h4 className="text-sm font-medium text-gray-900 capitalize">
-                                                    {element.type.replace(/_/g, ' ')}
-                                                </h4>
-                                                <dl className="mt-2 text-sm text-gray-500">
-                                                    <div>
-                                                        <dt className="inline font-medium">Position: </dt>
-                                                        <dd className="inline">{element.position}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt className="inline font-medium">Purpose: </dt>
-                                                        <dd className="inline">{element.purpose}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt className="inline font-medium">Styling: </dt>
-                                                        <dd className="inline">{element.styling}</dd>
-                                                    </div>
-                                                </dl>
-                                            </div>
-                                        ))}
+                                {concept.concept_json.details?.elements && Array.isArray(concept.concept_json.details.elements) && concept.concept_json.details.elements.length > 0 && (
+                                    <div>
+                                        <h3 className="text-lg font-medium text-gray-900">Elements</h3>
+                                        <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                            {concept.concept_json.details.elements.map((element, index) => (
+                                                <div key={index} className="bg-gray-50 p-4 rounded-lg">
+                                                    <h4 className="text-sm font-medium text-gray-900 capitalize">
+                                                        {typeof element.type === 'string' ? element.type.replace(/_/g, ' ') : 'Unknown'}
+                                                    </h4>
+                                                    <dl className="mt-2 text-sm text-gray-500">
+                                                        {element.position && (
+                                                            <div>
+                                                                <dt className="inline font-medium">Position: </dt>
+                                                                <dd className="inline">{element.position}</dd>
+                                                            </div>
+                                                        )}
+                                                        {element.purpose && (
+                                                            <div>
+                                                                <dt className="inline font-medium">Purpose: </dt>
+                                                                <dd className="inline">{element.purpose}</dd>
+                                                            </div>
+                                                        )}
+                                                        {element.styling && (
+                                                            <div>
+                                                                <dt className="inline font-medium">Styling: </dt>
+                                                                <dd className="inline">{element.styling}</dd>
+                                                            </div>
+                                                        )}
+                                                    </dl>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
+                                )}
 
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900">Visual Flow</h3>
-                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.visual_flow}</p>
-                                </div>
+                                {concept.concept_json.details?.visual_flow && (
+                                    <div>
+                                        <h3 className="text-lg font-medium text-gray-900">Visual Flow</h3>
+                                        <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.visual_flow}</p>
+                                    </div>
+                                )}
 
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900">Visual Tone</h3>
-                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.visual_tone}</p>
-                                </div>
+                                {concept.concept_json.details?.visual_tone && (
+                                    <div>
+                                        <h3 className="text-lg font-medium text-gray-900">Visual Tone</h3>
+                                        <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.visual_tone}</p>
+                                    </div>
+                                )}
 
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900">Best Practices</h3>
-                                    <ul className="mt-2 list-disc list-inside text-sm text-gray-500">
-                                        {concept.concept_json.details.best_practices.map((practice, index) => (
-                                            <li key={index}>{practice}</li>
-                                        ))}
-                                    </ul>
-                                </div>
+                                {concept.concept_json.details?.best_practices && Array.isArray(concept.concept_json.details.best_practices) && concept.concept_json.details.best_practices.length > 0 && (
+                                    <div>
+                                        <h3 className="text-lg font-medium text-gray-900">Best Practices</h3>
+                                        <ul className="mt-2 list-disc list-inside text-sm text-gray-500">
+                                            {concept.concept_json.details.best_practices.map((practice, index) => (
+                                                <li key={index}>{practice}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
 
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900">Color Palette</h3>
-                                    <dl className="mt-2 text-sm text-gray-500">
-                                        <div>
-                                            <dt className="inline font-medium">Primary: </dt>
-                                            <dd className="inline">{concept.concept_json.details.color_palette.primary}</dd>
-                                        </div>
-                                        <div>
-                                            <dt className="inline font-medium">Secondary: </dt>
-                                            <dd className="inline">{concept.concept_json.details.color_palette.secondary}</dd>
-                                        </div>
-                                        <div>
-                                            <dt className="inline font-medium">Accent: </dt>
-                                            <dd className="inline">{concept.concept_json.details.color_palette.accent}</dd>
-                                        </div>
-                                    </dl>
-                                </div>
+                                {concept.concept_json.details?.color_palette && (
+                                    <div>
+                                        <h3 className="text-lg font-medium text-gray-900">Color Palette</h3>
+                                        <dl className="mt-2 text-sm text-gray-500">
+                                            <div>
+                                                <dt className="inline font-medium">Primary: </dt>
+                                                <dd className="inline">{concept.concept_json.details.color_palette.primary || 'Not specified'}</dd>
+                                            </div>
+                                            <div>
+                                                <dt className="inline font-medium">Secondary: </dt>
+                                                <dd className="inline">{concept.concept_json.details.color_palette.secondary || 'Not specified'}</dd>
+                                            </div>
+                                            <div>
+                                                <dt className="inline font-medium">Accent: </dt>
+                                                <dd className="inline">{concept.concept_json.details.color_palette.accent || 'Not specified'}</dd>
+                                            </div>
+                                        </dl>
+                                    </div>
+                                )}
 
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900">Spacing Strategy</h3>
-                                    <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.spacing_strategy}</p>
-                                </div>
+                                {concept.concept_json.details?.spacing_strategy && (
+                                    <div>
+                                        <h3 className="text-lg font-medium text-gray-900">Spacing Strategy</h3>
+                                        <p className="mt-2 text-sm text-gray-500">{concept.concept_json.details.spacing_strategy}</p>
+                                    </div>
+                                )}
                             </div>
                         )}
 
-                        <div className="mt-8">
+                        <div className="mt-8 flex space-x-4">
                             <Link
                                 href="/dashboard"
                                 className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                             >
                                 Back to Dashboard
+                            </Link>
+                            <Link
+                                href={`/ad-recipes/new?concepts=${params.id}`}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                            >
+                                Generate Ad
                             </Link>
                         </div>
                     </div>

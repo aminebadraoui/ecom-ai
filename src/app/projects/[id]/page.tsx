@@ -8,6 +8,8 @@ import Link from 'next/link';
 import { v4 as uuidv4 } from 'uuid';
 import { toast } from 'react-hot-toast';
 import { supabase } from '../../../lib/supabase';
+import { generateAdRecipe, subscribeToTaskStream } from '@/lib/adRemixerClient';
+import { getUserId } from '@/lib/auth-client';
 
 interface Ad {
     ad_archive_id: string;
@@ -30,17 +32,20 @@ interface Ad {
             resized_image_url: string | null;
         }>;
     };
-    concept?: {
-        id: string | null;
-        task_id: string | null;
-        status: 'pending' | 'processing' | 'completed' | 'failed';
-        concept_json?: any;
-        error?: string;
-    };
     ad_recipe?: {
         id: string;
         status: 'pending' | 'completed' | 'failed';
     };
+}
+
+interface Product {
+    id: string;
+    user_id: string;
+    name: string;
+    sales_url: string;
+    details_json: any;
+    created_at?: string;
+    updated_at?: string;
 }
 
 type ActiveTab = 'image' | 'video';
@@ -54,10 +59,17 @@ interface AdTableProps {
     adType: 'image' | 'video';
     selectable: boolean;
     onSelectionChange: (ads: Ad[]) => void;
-    onGenerateAd: (adId: string, conceptId: string) => Promise<void>;
-    onGenerateConcept: (ad: Ad, imageUrl: string) => Promise<void>;
-    conceptsInProgress: string[];
     adsInProgress: string[];
+}
+
+// Add a new interface for recipe tasks
+interface RecipeTask {
+    adId: string;
+    taskId: string;
+    status: 'pending' | 'completed' | 'failed';
+    adImageUrl?: string;
+    adName?: string;
+    result?: any;
 }
 
 export default function ProjectPage({ params }: { params: PageParams }) {
@@ -68,17 +80,29 @@ export default function ProjectPage({ params }: { params: PageParams }) {
     const [selectedAds, setSelectedAds] = useState<Ad[]>([]);
     const { id } = params;
     const [isLoading, setIsLoading] = useState(true);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isGenerating, setIsGenerating] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
-    const [country, setCountry] = useState('');
-    const [language, setLanguage] = useState('');
-    const [conceptsInProgress, setConceptsInProgress] = useState<string[]>([]);
+    const [country, setCountry] = useState('US');
+    const [language, setLanguage] = useState('en');
+    const [showProductSelector, setShowProductSelector] = useState(false);
+    const [products, setProducts] = useState<Product[]>([]);
+    const [selectedProduct, setSelectedProduct] = useState<string>('');
+    const [newProductUrl, setNewProductUrl] = useState<string>('');
+    const [showNewProductForm, setShowNewProductForm] = useState(false);
+    const [newProduct, setNewProduct] = useState<Omit<Product, 'id' | 'user_id' | 'created_at' | 'updated_at'>>({
+        name: '',
+        sales_url: '',
+        details_json: {}
+    });
     const [adsInProgress, setAdsInProgress] = useState<string[]>([]);
-    const [showConceptGenerator, setShowConceptGenerator] = useState(false);
+    const [recipeTasks, setRecipeTasks] = useState<RecipeTask[]>([]);
+    const [showTasksModal, setShowTasksModal] = useState(false);
+    const [selectedTask, setSelectedTask] = useState<RecipeTask | null>(null);
+    const [showTaskDetailModal, setShowTaskDetailModal] = useState(false);
 
     // Load workflow data from API on mount
     useEffect(() => {
@@ -100,36 +124,20 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                 const data = await response.json();
                 if (data.workflow) {
                     setWorkflowName(data.workflow.name);
-
-                    // Fetch concepts for all ads
-                    const adArchiveIds = data.workflow.ads.map((ad: Ad) => ad.ad_archive_id);
-
-                    const { data: concepts, error } = await supabase
-                        .from('ad_concepts')
-                        .select('*')
-                        .in('ad_archive_id', adArchiveIds);
-
-                    if (error) {
-                        console.error('Error fetching concepts:', error);
-                    } else {
-                        // Map concepts to their respective ads
-                        const adsWithConcepts = data.workflow.ads.map((ad: Ad) => {
-                            const concept = concepts?.find(c => c.ad_archive_id === ad.ad_archive_id);
-                            return concept ? {
-                                ...ad,
-                                concept: {
-                                    id: concept.id,
-                                    task_id: concept.task_id,
-                                    status: concept.status,
-                                    concept_json: concept.concept_json,
-                                    error: concept.error
-                                }
-                            } : ad;
-                        });
-
-                        setAds(adsWithConcepts || []);
-                    }
+                    setAds(data.workflow.ads || []);
                 }
+
+                // Setup default product
+                setProducts([
+                    {
+                        id: 'direct-product',
+                        user_id: 'direct-user',
+                        name: 'Direct Product',
+                        sales_url: '',
+                        details_json: {}
+                    }
+                ]);
+
             } catch (err) {
                 console.error('Error fetching workflow:', err);
                 setError(err instanceof Error ? err.message : 'Failed to load workflow');
@@ -140,181 +148,130 @@ export default function ProjectPage({ params }: { params: PageParams }) {
         fetchWorkflow();
     }, [id, router]);
 
-    const handleGenerateConcept = async (ad: Ad, imageUrl: string) => {
-        console.log('handleGenerateConcept called with:', {
-            ad_archive_id: ad.ad_archive_id,
-            imageUrl,
-            adType: activeTab,
-            adSnapshot: ad.snapshot
+    // New useEffect to handle recipe task tracking with localStorage
+    useEffect(() => {
+        // Load tasks from localStorage on mount
+        const savedTasks = localStorage.getItem('recipeTasks');
+        if (savedTasks) {
+            try {
+                const parsedTasks = JSON.parse(savedTasks);
+                setRecipeTasks(parsedTasks);
+
+                // Set up streaming for pending tasks
+                const pendingTasks = parsedTasks.filter((task: RecipeTask) => task.status === 'pending');
+                pendingTasks.forEach((task: RecipeTask) => {
+                    subscribeToTaskStream(task.taskId, task.adId, task.adImageUrl || '', task.adName || '');
+                });
+            } catch (e) {
+                console.error('Error parsing saved tasks:', e);
+            }
+        }
+    }, []);
+
+    // Save tasks to localStorage when they change
+    useEffect(() => {
+        if (recipeTasks.length > 0) {
+            localStorage.setItem('recipeTasks', JSON.stringify(recipeTasks));
+        }
+    }, [recipeTasks]);
+
+    // Function to subscribe to task stream
+    const subscribeToTaskStream = (taskId: string, adId: string, adImageUrl: string, adName: string) => {
+        const eventSource = new EventSource(`https://ai.adremixer.com/api/v1/tasks/${taskId}/stream`);
+
+        eventSource.onmessage = async (event) => {
+            const data = JSON.parse(event.data);
+            console.log('Stream data:', data);
+
+            if (data.status === 'completed') {
+                // Update the task status in our state
+                setRecipeTasks(prev => prev.map(task =>
+                    task.taskId === taskId
+                        ? { ...task, status: 'completed', result: data.result }
+                        : task
+                ));
+
+                // Save the recipe to Supabase
+                saveRecipeToSupabase(adId, adImageUrl, data.result);
+
+                eventSource.close();
+
+                toast.success(
+                    <div className="flex items-center space-x-2">
+                        <span>Recipe generated successfully!</span>
+                        <button
+                            onClick={() => {
+                                // Find the task
+                                const task = recipeTasks.find(t => t.taskId === taskId);
+                                if (task) {
+                                    setSelectedTask(task);
+                                    setShowTaskDetailModal(true);
+                                }
+                            }}
+                            className="ml-2 text-white bg-indigo-600 px-2 py-1 rounded text-xs"
+                        >
+                            View
+                        </button>
+                    </div>,
+                    { duration: 5000 }
+                );
+            } else if (data.status === 'failed') {
+                // Update as failed
+                setRecipeTasks(prev =>
+                    prev.map(t =>
+                        t.taskId === taskId
+                            ? { ...t, status: 'failed' }
+                            : t
+                    )
+                );
+
+                // Update UI
+                setAdsInProgress(prev => prev.filter(id => id !== adId));
+                toast.error(`Recipe for ad ${adId} failed to generate`);
+
+                // Close the stream
+                eventSource.close();
+            }
+        };
+
+        eventSource.addEventListener('error', () => {
+            console.error(`Error in task stream for task ${taskId}`);
+            eventSource.close();
         });
 
-        if (!imageUrl) {
-            console.error('imageUrl is undefined or empty');
-            toast.error('No image URL available for this ad');
-            return;
-        }
+        return eventSource;
+    };
 
+    // Function to save recipe to Supabase
+    const saveRecipeToSupabase = async (adId: string, adImageUrl: string, result: any) => {
         try {
-            console.log('Starting concept generation for ad:', {
-                ad_archive_id: ad.ad_archive_id,
-                image_url: imageUrl
-            });
+            // Extract the needed data from the result
+            const recipeData = {
+                ad_archive_id: adId,
+                image_url: adImageUrl,
+                sales_url: newProductUrl, // Use the current product URL
+                ad_concept_json: result.adConcept || {},
+                sales_page_json: result.salesPage || {},
+                recipe_prompt: result.prompt || '',
+            };
 
-            // Add to in-progress list
-            setConceptsInProgress(prev => [...prev, ad.ad_archive_id]);
-            setError(null);
+            console.log('Saving recipe to Supabase:', recipeData);
 
-            // First, clear any existing concept data for this ad
-            setAds(prevAds => prevAds.map(a => {
-                if (a.ad_archive_id === ad.ad_archive_id) {
-                    const { concept, ...rest } = a;
-                    return rest;
-                }
-                return a;
-            }));
+            // Insert into Supabase
+            const { data, error } = await supabase
+                .from('ad_recipes')
+                .insert(recipeData);
 
-            console.log('Sending POST request to /api/ad-concepts with:', {
-                ad_archive_id: ad.ad_archive_id,
-                image_url: imageUrl
-            });
-
-            const response = await fetch('/api/ad-concepts', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    ad_archive_id: ad.ad_archive_id,
-                    image_url: imageUrl
-                }),
-                // Include credentials to send cookies
-                credentials: 'include'
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Error response from API:', {
-                    status: response.status,
-                    statusText: response.statusText,
-                    error: errorData
-                });
-
-                if (response.status === 401) {
-                    toast.error('Please log in to generate concepts');
-                    router.push('/login');
-                    return;
-                }
-
-                toast.error(`Error generating concept: ${errorData.error || response.statusText}`);
-                setAds(prevAds => prevAds.map(a => {
-                    if (a.ad_archive_id === ad.ad_archive_id) {
-                        return {
-                            ...a,
-                            concept: {
-                                id: null,
-                                task_id: null,
-                                status: 'failed' as const,
-                                error: errorData.error || response.statusText
-                            }
-                        };
-                    }
-                    return a;
-                }));
+            if (error) {
+                console.error('Error saving recipe to Supabase:', error);
+                toast.error('Failed to save recipe to database');
                 return;
             }
 
-            const responseData = await response.json();
-            console.log('Received concept data from API:', responseData);
-
-            // Update the ad with the new concept data
-            setAds(prevAds => prevAds.map(a => {
-                if (a.ad_archive_id === ad.ad_archive_id) {
-                    return {
-                        ...a,
-                        concept: {
-                            id: responseData.id,
-                            task_id: responseData.task_id,
-                            status: responseData.status,
-                        }
-                    };
-                }
-                return a;
-            }));
-
-            // Set up SSE connection to our internal API
-            console.log('Setting up SSE connection to:', responseData.sse_url);
-            const eventSource = new EventSource(responseData.sse_url, {
-                withCredentials: true // Include cookies in the SSE request
-            });
-
-            eventSource.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                console.log('Received SSE update:', data);
-
-                // Update the ad with the completed concept data
-                setAds(prevAds => prevAds.map(a => {
-                    if (a.ad_archive_id === ad.ad_archive_id) {
-                        return {
-                            ...a,
-                            concept: {
-                                id: data.id,
-                                task_id: data.task_id,
-                                status: data.status,
-                                concept_json: data.concept_json,
-                                error: data.error
-                            }
-                        };
-                    }
-                    return a;
-                }));
-
-                // Remove from in-progress list
-                setConceptsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
-
-                if (data.status === 'completed') {
-                    setSuccess(`Concept for ad ${ad.ad_archive_id} generated successfully!`);
-                    eventSource.close();
-                } else if (data.status === 'failed') {
-                    setError(`Failed to generate concept for ad ${ad.ad_archive_id}: ${data.error || 'Unknown error'}`);
-                    eventSource.close();
-                }
-            };
-
-            eventSource.onerror = (error) => {
-                console.error('SSE Error:', error);
-                eventSource.close();
-
-                // Update the concept status to failed
-                setAds(prevAds => prevAds.map(a => {
-                    if (a.ad_archive_id === ad.ad_archive_id) {
-                        return {
-                            ...a,
-                            concept: {
-                                id: responseData.id,
-                                task_id: responseData.task_id,
-                                status: 'failed' as const,
-                                error: 'Connection error'
-                            }
-                        };
-                    }
-                    return a;
-                }));
-
-                // Remove from in-progress list
-                setConceptsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
-                setError(`Failed to generate concept for ad ${ad.ad_archive_id}: Connection error`);
-            };
-
-            // Add event listener for when the connection is opened
-            eventSource.onopen = () => {
-                console.log('SSE connection opened');
-            };
+            console.log('Recipe saved successfully:', data);
+            toast.success('Recipe saved to database', { id: 'save-success' });
         } catch (err) {
-            console.error('Error in handleGenerateConcept:', err);
-            setError(err instanceof Error ? err.message : 'Failed to generate concept');
-
-            // Remove from in-progress list
-            setConceptsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
+            console.error('Error in saveRecipeToSupabase:', err);
         }
     };
 
@@ -365,163 +322,175 @@ export default function ProjectPage({ params }: { params: PageParams }) {
         setSelectedAds(newSelectedAds);
     };
 
-    const handleGenerateAd = async (adId: string, conceptId: string) => {
+    const handleCreateProduct = async (e: React.FormEvent) => {
+        e.preventDefault();
+
+        if (!newProduct.name || !newProduct.sales_url) {
+            toast.error('Please fill out all required fields');
+            return;
+        }
+
         try {
-            // Add to in-progress list
-            setAdsInProgress(prev => [...prev, adId]);
-            setError(null);
-
-            // Find a product to use (in a real app, you'd let the user choose)
-            const productsResponse = await fetch('/api/products');
-            const productsData = await productsResponse.json();
-
-            if (!productsResponse.ok || !productsData.products || productsData.products.length === 0) {
-                throw new Error('No products available to generate ad');
-            }
-
-            const productId = productsData.products[0].id;
-
-            // Create ad recipe
-            const response = await fetch('/api/ad-recipes', {
+            const response = await fetch('/api/products', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    conceptIds: [conceptId],
-                    productId,
-                    name: `Ad for ${adId}`
-                }),
+                body: JSON.stringify(newProduct),
             });
 
             if (!response.ok) {
-                throw new Error('Failed to generate ad');
+                throw new Error('Failed to create product');
             }
 
             const data = await response.json();
 
-            // Update the ads list with the new ad recipe
-            setAds(prevAds => prevAds.map(ad => {
-                if (ad.ad_archive_id === adId) {
-                    return {
-                        ...ad,
-                        ad_recipe: {
-                            id: data.recipe.id,
-                            status: 'completed'
-                        }
-                    };
-                }
-                return ad;
-            }));
+            // Add new product to list and select it
+            setProducts(prev => [...prev, data.product]);
+            setSelectedProduct(data.product.id);
 
-            setSuccess(`Ad for ad ${adId} generated successfully!`);
+            // Reset form and hide it
+            setNewProduct({
+                name: '',
+                sales_url: '',
+                details_json: {}
+            });
+            setShowNewProductForm(false);
+            setNewProductUrl('');
+
+            toast.success('Product created successfully');
         } catch (err) {
-            console.error('Error generating ad:', err);
-            setError(err instanceof Error ? err.message : 'Failed to generate ad');
-
-            // Update the ad with failed status
-            setAds(prevAds => prevAds.map(ad => {
-                if (ad.ad_archive_id === adId) {
-                    return {
-                        ...ad,
-                        ad_recipe: {
-                            id: 'failed',
-                            status: 'failed'
-                        }
-                    };
-                }
-                return ad;
-            }));
-        } finally {
-            // Remove from in-progress list
-            setAdsInProgress(prev => prev.filter(id => id !== adId));
+            console.error('Error creating product:', err);
+            toast.error(err instanceof Error ? err.message : 'Failed to create product');
         }
     };
 
-    const handleExtractConcepts = async (e: React.MouseEvent<HTMLButtonElement> | React.FormEvent | undefined) => {
-        // Prevent any navigation
+    const handleGenerateAdRecipes = async (e: React.MouseEvent<HTMLButtonElement> | React.FormEvent | undefined) => {
         if (e) {
             e.preventDefault();
             e.stopPropagation();
         }
 
         if (selectedAds.length === 0) {
-            setError('Please select at least one ad to analyze');
+            setError('Please select at least one ad to generate recipe');
             return;
         }
 
-        setIsAnalyzing(true);
+        // Always show product selector when generating recipes
+        if (!newProductUrl) {
+            setShowProductSelector(true);
+            return;
+        }
+
+        setIsGenerating(true);
         setError(null);
         setSuccess(null);
 
-        try {
-            // Instead of redirecting, process the ads directly here
-            const adIds = selectedAds.map(ad => ad.ad_archive_id);
-            console.log(`Processing ${adIds.length} ads for concept extraction`);
-
-            // Show the ConceptGenerator for the selected ads
-            setShowConceptGenerator(true);
-        } catch (err) {
-            console.error('Error preparing to analyze ads:', err);
-            setError(err instanceof Error ? err.message : 'Failed to prepare ad analysis');
-            setIsAnalyzing(false);
-        }
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsLoading(true);
-        setError(null);
+        // Keep track of ads in progress
+        const adIdsToProcess = selectedAds.map(ad => ad.ad_archive_id);
+        setAdsInProgress(prev => [...prev, ...adIdsToProcess]);
 
         try {
-            const response = await fetch('/api/facebook-ads', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    searchTerm,
-                    startDate,
-                    endDate,
-                    country,
-                    language,
-                }),
+            // Use only the provided product URL - no local API calls
+            const productUrl = newProductUrl;
+
+            // Process each ad and call the external API directly
+            const recipePromises = selectedAds.map(async (ad) => {
+                try {
+                    // Get ad image URL
+                    const adImageUrl = ad.snapshot?.cards?.find((card: any) => card.resized_image_url)?.resized_image_url ||
+                        ad.snapshot?.images?.[0]?.resized_image_url ||
+                        ad.snapshot?.videos?.[0]?.video_preview_image_url || '';
+
+                    if (!adImageUrl) {
+                        throw new Error(`No image URL found for ad ${ad.ad_archive_id}`);
+                    }
+
+                    // Just call the external API directly - nothing else
+                    const adRemixerResponse = await fetch('https://ai.adremixer.com/api/v1/generate-ad-recipe', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            ad_archive_id: ad.ad_archive_id,
+                            image_url: adImageUrl,
+                            sales_url: productUrl,
+                            user_id: 'direct-user' // Simple fixed value
+                        }),
+                    });
+
+                    if (!adRemixerResponse.ok) {
+                        const errorData = await adRemixerResponse.json();
+                        throw new Error(`AdRemixer API error: ${errorData.error || adRemixerResponse.statusText}`);
+                    }
+
+                    const adRemixerData = await adRemixerResponse.json();
+
+                    // Just log the task ID
+                    console.log(`Started generation for ad ${ad.ad_archive_id}, task ID: ${adRemixerData.task_id}`);
+
+                    // Log result and update UI
+                    console.log(`Recipe generation started: ${JSON.stringify(adRemixerData)}`);
+
+                    // Create a new task and add it to our state
+                    const newTask: RecipeTask = {
+                        adId: ad.ad_archive_id,
+                        taskId: adRemixerData.task_id,
+                        status: 'pending',
+                        adImageUrl: adImageUrl,
+                        adName: ad.page_name || 'Unknown'
+                    };
+
+                    setRecipeTasks(prev => [...prev, newTask]);
+
+                    // Start streaming for this task
+                    subscribeToTaskStream(adRemixerData.task_id, ad.ad_archive_id, adImageUrl, ad.page_name || '');
+
+                    return {
+                        adId: ad.ad_archive_id,
+                        taskId: adRemixerData.task_id
+                    };
+                } catch (apiError) {
+                    console.error(`Error generating recipe for ad ${ad.ad_archive_id}:`, apiError);
+                    setAdsInProgress(prev => prev.filter(id => id !== ad.ad_archive_id));
+                    return null;
+                }
             });
 
-            if (!response.ok) {
-                throw new Error('Failed to fetch ads');
-            }
+            // Wait for all API calls to be initiated
+            const generationTasks = await Promise.all(recipePromises);
+            const validTasks = generationTasks.filter(Boolean);
 
-            const data = await response.json();
+            setSuccess(`Started generating ${validTasks.length} ad recipe(s) directly with AdRemixer API`);
+            setShowProductSelector(false);
 
-            // Update workflow via API
-            const updateResponse = await fetch(`/api/workflows/${id}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    ads: data.ads
-                }),
-            });
+            // Reset selection
+            setSelectedAds([]);
 
-            if (!updateResponse.ok) {
-                throw new Error('Failed to update workflow');
-            }
-
-            const updatedData = await updateResponse.json();
-            setAds(updatedData.workflow.ads || []);
-            setSuccess('Ads fetched and workflow updated successfully!');
+            toast.success(
+                <div>
+                    Ad recipe generation started! <button
+                        onClick={() => setShowTasksModal(true)}
+                        className="ml-2 text-white bg-indigo-600 px-2 py-1 rounded text-xs"
+                    >
+                        View Tasks
+                    </button>
+                </div>,
+                { duration: 5000 }
+            );
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'An error occurred');
+            console.error('Error generating ad recipes:', err);
+            setError(err instanceof Error ? err.message : 'Failed to generate ad recipes');
+            setAdsInProgress([]);
         } finally {
-            setIsLoading(false);
+            setIsGenerating(false);
         }
     };
 
     // Banner content for tasks in progress
     const renderTasksBanner = () => {
-        if (conceptsInProgress.length === 0 && adsInProgress.length === 0) {
+        if (adsInProgress.length === 0) {
             return null;
         }
 
@@ -533,13 +502,304 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                     </div>
                     <div className="ml-3">
                         <p className="text-sm font-medium text-green-800">
-                            {conceptsInProgress.length > 0 && (
-                                <>Concept for ad {conceptsInProgress.join(', ')} generated successfully!</>
-                            )}
-                            {adsInProgress.length > 0 && conceptsInProgress.length === 0 && (
-                                <>Ad for ad {adsInProgress.join(', ')} generated successfully!</>
+                            {adsInProgress.length === 1 ? (
+                                <>Generating recipe for ad {adsInProgress[0]}...</>
+                            ) : (
+                                <>
+                                    Generating {adsInProgress.length} recipes...
+                                </>
                             )}
                         </p>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // Product selector modal
+    const renderProductSelector = () => {
+        if (!showProductSelector) {
+            return null;
+        }
+
+        return (
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-medium text-gray-900">Enter Product URL</h3>
+                            <button
+                                onClick={() => setShowProductSelector(false)}
+                                className="text-gray-400 hover:text-gray-500"
+                            >
+                                <span className="sr-only">Close</span>
+                                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div className="px-6 py-4">
+                        <div className="mb-4">
+                            <label htmlFor="productUrl" className="block text-sm font-medium text-gray-700">
+                                Product URL *
+                            </label>
+                            <input
+                                type="url"
+                                id="productUrl"
+                                name="productUrl"
+                                value={newProductUrl}
+                                onChange={(e) => setNewProductUrl(e.target.value)}
+                                placeholder="https://example.com/product"
+                                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                required
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                                This URL will be sent directly to the external API
+                            </p>
+                        </div>
+                    </div>
+                    <div className="px-6 py-4 border-t border-gray-200 text-right">
+                        <button
+                            onClick={() => setShowProductSelector(false)}
+                            className="mr-3 inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleGenerateAdRecipes}
+                            disabled={!newProductUrl}
+                            className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${!newProductUrl ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500'}`}
+                        >
+                            Generate
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // Render tasks modal
+    const renderTasksModal = () => {
+        if (!showTasksModal) {
+            return null;
+        }
+
+        return (
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-medium text-gray-900">Ad Recipe Tasks</h3>
+                            <button
+                                onClick={() => setShowTasksModal(false)}
+                                className="text-gray-400 hover:text-gray-500"
+                            >
+                                <span className="sr-only">Close</span>
+                                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div className="overflow-auto flex-grow">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50 sticky top-0">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Ad ID
+                                    </th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Ad Image
+                                    </th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Status
+                                    </th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Action
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {recipeTasks.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={4} className="px-6 py-4 text-center text-sm text-gray-500">
+                                            No tasks yet
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    recipeTasks.map((task) => (
+                                        <tr key={task.taskId}>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                {task.adId}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                {task.adImageUrl ? (
+                                                    <div className="h-16 w-16 relative">
+                                                        <img
+                                                            src={task.adImageUrl}
+                                                            alt="Ad"
+                                                            className="h-full w-full object-cover rounded"
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <div className="h-16 w-16 bg-gray-100 rounded flex items-center justify-center">
+                                                        <span className="text-xs text-gray-500">No image</span>
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${task.status === 'completed'
+                                                    ? 'bg-green-100 text-green-800'
+                                                    : task.status === 'failed'
+                                                        ? 'bg-red-100 text-red-800'
+                                                        : 'bg-yellow-100 text-yellow-800'
+                                                    }`}>
+                                                    {task.status === 'pending' && (
+                                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-yellow-800" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                        </svg>
+                                                    )}
+                                                    {task.status.charAt(0).toUpperCase() + task.status.slice(1)}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                <button
+                                                    onClick={() => {
+                                                        if (task.status === 'completed') {
+                                                            setSelectedTask(task);
+                                                            setShowTaskDetailModal(true);
+                                                        } else if (task.status === 'pending') {
+                                                            window.open(`https://ai.adremixer.com/api/v1/tasks/${task.taskId}/status`, '_blank');
+                                                        }
+                                                    }}
+                                                    disabled={task.status === 'failed'}
+                                                    className={`${task.status === 'completed'
+                                                        ? 'text-indigo-600 hover:text-indigo-900'
+                                                        : task.status === 'pending'
+                                                            ? 'text-yellow-600 hover:text-yellow-900'
+                                                            : 'text-gray-400 cursor-not-allowed'
+                                                        }`}
+                                                >
+                                                    {task.status === 'completed' ? 'View Recipe' : task.status === 'pending' ? 'Check Status' : 'Failed'}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="px-6 py-4 border-t border-gray-200">
+                        <button
+                            onClick={() => setShowTasksModal(false)}
+                            className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // Render task detail modal
+    const renderTaskDetailModal = () => {
+        if (!showTaskDetailModal || !selectedTask) {
+            return null;
+        }
+
+        return (
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-medium text-gray-900">Ad Recipe for {selectedTask.adId}</h3>
+                            <button
+                                onClick={() => {
+                                    setShowTaskDetailModal(false);
+                                    setSelectedTask(null);
+                                }}
+                                className="text-gray-400 hover:text-gray-500"
+                            >
+                                <span className="sr-only">Close</span>
+                                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div className="overflow-auto p-6 flex-grow">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 className="font-medium text-gray-900 mb-2">Original Ad</h4>
+                                {selectedTask.adImageUrl ? (
+                                    <div className="relative h-64 w-full mb-4">
+                                        <img
+                                            src={selectedTask.adImageUrl}
+                                            alt="Ad"
+                                            className="h-full w-full object-contain rounded"
+                                        />
+                                    </div>
+                                ) : (
+                                    <div className="h-64 w-full bg-gray-100 rounded flex items-center justify-center mb-4">
+                                        <span className="text-sm text-gray-500">No image available</span>
+                                    </div>
+                                )}
+                                <a
+                                    href={`https://www.facebook.com/ads/library/?id=${selectedTask.adId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-indigo-600 hover:text-indigo-900 text-sm"
+                                >
+                                    View Original Ad in Facebook Ads Library
+                                </a>
+                            </div>
+                            <div>
+                                <h4 className="font-medium text-gray-900 mb-2">Recipe</h4>
+                                {selectedTask.result ? (
+                                    <div className="overflow-auto bg-gray-50 p-4 rounded max-h-[500px]">
+                                        <pre className="text-xs whitespace-pre-wrap">
+                                            {JSON.stringify(selectedTask.result, null, 2)}
+                                        </pre>
+                                    </div>
+                                ) : (
+                                    <div className="h-64 w-full bg-gray-100 rounded flex items-center justify-center">
+                                        <span className="text-sm text-gray-500">No recipe data available</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        {selectedTask.result?.recipe_prompt && (
+                            <div className="mt-6">
+                                <h4 className="font-medium text-gray-900 mb-2">Recipe Prompt</h4>
+                                <div className="overflow-auto bg-gray-50 p-4 rounded max-h-[300px]">
+                                    <pre className="text-xs whitespace-pre-wrap">
+                                        {selectedTask.result.recipe_prompt}
+                                    </pre>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <div className="px-6 py-4 border-t border-gray-200 flex justify-between">
+                        <button
+                            onClick={() => {
+                                setShowTaskDetailModal(false);
+                                setSelectedTask(null);
+                            }}
+                            className="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Close
+                        </button>
+                        <a
+                            href={`https://ai.adremixer.com/api/v1/tasks/${selectedTask.taskId}/result`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            View Raw Result
+                        </a>
                     </div>
                 </div>
             </div>
@@ -581,9 +841,23 @@ export default function ProjectPage({ params }: { params: PageParams }) {
         <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
             <div className="px-4 py-6 sm:px-0">
                 {renderTasksBanner()}
+                {renderProductSelector()}
+                {renderTasksModal()}
+                {renderTaskDetailModal()}
                 <div className="flex justify-between items-center mb-6">
                     <h1 className="text-2xl font-semibold text-gray-900">{workflowName}</h1>
                     <div className="flex space-x-3">
+                        <button
+                            onClick={() => setShowTasksModal(true)}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            View Recipe Tasks
+                            {recipeTasks.filter(t => t.status === 'pending').length > 0 && (
+                                <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-white text-indigo-600">
+                                    {recipeTasks.filter(t => t.status === 'pending').length}
+                                </span>
+                            )}
+                        </button>
                         <Link
                             href="/ad-recipes"
                             className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -622,47 +896,46 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                 <div className="border-b border-gray-200">
                     <nav className="-mb-px flex space-x-8" aria-label="Tabs">
                         <button
+                            className={`${activeTab === 'image'
+                                ? 'border-indigo-500 text-indigo-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
                             onClick={() => setActiveTab('image')}
-                            className={clsx(
-                                activeTab === 'image'
-                                    ? 'border-indigo-500 text-indigo-600'
-                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300',
-                                'whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm'
-                            )}
                         >
-                            Image Ads ({ads.filter(ad => !ad.snapshot?.videos || ad.snapshot.videos.length === 0 || ad.snapshot?.cards?.some(card => card.resized_image_url)).length})
+                            Image Ads
                         </button>
                         <button
+                            className={`${activeTab === 'video'
+                                ? 'border-indigo-500 text-indigo-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
                             onClick={() => setActiveTab('video')}
-                            className={clsx(
-                                activeTab === 'video'
-                                    ? 'border-indigo-500 text-indigo-600'
-                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300',
-                                'whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm'
-                            )}
                         >
-                            Video Ads ({ads.filter(ad => ad.snapshot?.videos && ad.snapshot.videos.length > 0).length})
+                            Video Ads
                         </button>
                     </nav>
                 </div>
 
-                {showConceptGenerator && selectedAds.length > 0 && (
-                    <div className="mb-6">
-                        {/* Concept generator component */}
-                    </div>
-                )}
+                <div className="bg-white shadow rounded-lg p-6 mb-6">
+                    {activeTab === 'image' && (
+                        <AdTable
+                            ads={filteredAds}
+                            adType="image"
+                            selectable={true}
+                            onSelectionChange={handleSelectionChange}
+                            adsInProgress={adsInProgress}
+                        />
+                    )}
 
-                <div className="mt-6 bg-white shadow overflow-hidden sm:rounded-lg">
-                    <AdTable
-                        ads={filteredAds}
-                        adType={activeTab}
-                        selectable={true}
-                        onSelectionChange={handleSelectionChange}
-                        onGenerateAd={handleGenerateAd}
-                        onGenerateConcept={handleGenerateConcept}
-                        conceptsInProgress={conceptsInProgress}
-                        adsInProgress={adsInProgress}
-                    />
+                    {activeTab === 'video' && (
+                        <AdTable
+                            ads={filteredAds}
+                            adType="video"
+                            selectable={true}
+                            onSelectionChange={handleSelectionChange}
+                            adsInProgress={adsInProgress}
+                        />
+                    )}
                 </div>
 
                 {selectedAds.length > 0 && (
@@ -672,14 +945,14 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                                 {selectedAds.length} ad{selectedAds.length !== 1 ? 's' : ''} selected
                             </span>
                             <button
-                                onClick={handleExtractConcepts}
-                                disabled={isAnalyzing}
+                                onClick={() => setShowProductSelector(true)}
+                                disabled={isGenerating}
                                 className={clsx(
                                     'inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500',
-                                    isAnalyzing && 'opacity-50 cursor-not-allowed'
+                                    isGenerating && 'opacity-50 cursor-not-allowed'
                                 )}
                             >
-                                {isAnalyzing ? 'Analyzing...' : 'Extract Ad Concepts'}
+                                {isGenerating ? 'Generating...' : 'Generate Ad Recipe'}
                             </button>
                         </div>
                     </div>

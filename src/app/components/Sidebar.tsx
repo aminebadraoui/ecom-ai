@@ -22,7 +22,6 @@ import { useRouter } from 'next/navigation';
 const authNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
     { name: 'Ad Scraper', href: '/projects/new', icon: MagnifyingGlassIcon },
-    { name: 'Ad Concepts', href: '/concepts', icon: PhotoIcon },
     { name: 'Ad Recipes', href: '/ad-recipes', icon: DocumentTextIcon },
     { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
     { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },

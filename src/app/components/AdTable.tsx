@@ -26,13 +26,6 @@ interface Ad {
             resized_image_url: string | null;
         }>;
     };
-    concept?: {
-        id: string | null;
-        task_id: string | null;
-        status: 'pending' | 'processing' | 'completed' | 'failed';
-        concept_json?: any;
-        error?: string;
-    };
     ad_recipe?: {
         id: string;
         status: 'pending' | 'completed' | 'failed';
@@ -44,9 +37,6 @@ interface AdTableProps {
     adType: 'image' | 'video';
     selectable: boolean;
     onSelectionChange: (ads: Ad[]) => void;
-    onGenerateAd: (adId: string, conceptId: string) => Promise<void>;
-    onGenerateConcept: (ad: Ad, imageUrl: string) => Promise<void>;
-    conceptsInProgress: string[];
     adsInProgress: string[];
 }
 
@@ -65,9 +55,6 @@ export default function AdTable({
     adType,
     selectable = false,
     onSelectionChange,
-    onGenerateAd,
-    onGenerateConcept,
-    conceptsInProgress = [],
     adsInProgress = []
 }: AdTableProps) {
     const [selectedAdIds, setSelectedAdIds] = useState<string[]>([]);
@@ -154,13 +141,7 @@ export default function AdTable({
                             scope="col"
                             className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                         >
-                            Concept
-                        </th>
-                        <th
-                            scope="col"
-                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                        >
-                            Your Ad
+                            Status
                         </th>
                     </tr>
                 </thead>
@@ -184,22 +165,11 @@ export default function AdTable({
 
                         const adLibraryLink = `https://www.facebook.com/ads/library/?id=${ad.ad_archive_id}`;
                         const isSelected = selectedAdIds.includes(ad.ad_archive_id);
-                        const isConceptInProgress = conceptsInProgress.includes(ad.ad_archive_id);
                         const isAdInProgress = adsInProgress.includes(ad.ad_archive_id);
 
-                        // Check if we have concept data
-                        const conceptExists = !!ad.concept;
-                        const conceptStatus = ad.concept?.status || null;
-                        const isConceptPending = conceptStatus === 'pending';
-                        const isConceptFailed = conceptStatus === 'failed';
-                        const isGeneratingConcept = conceptsInProgress.includes(ad.ad_archive_id);
-
-                        // Show Generate only if concept doesn't exist or has no data
-                        // AND isn't pending AND isn't failed AND isn't currently generating
-                        const showGenerate = (!conceptExists || !ad.concept?.id) &&
-                            !isConceptPending &&
-                            !isConceptFailed &&
-                            !isGeneratingConcept;
+                        // Check if we have ad recipe data
+                        const recipeExists = !!ad.ad_recipe;
+                        const recipeStatus = ad.ad_recipe?.status || null;
 
                         return (
                             <tr
@@ -258,170 +228,30 @@ export default function AdTable({
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                     {formatDate(ad.start_date)}
                                 </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-indigo-600 hover:text-indigo-900">
-                                    <Link href={adLibraryLink} target="_blank" rel="noopener noreferrer">
-                                        View Ad
-                                    </Link>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    <a
+                                        href={adLibraryLink}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-indigo-600 hover:text-indigo-900"
+                                    >
+                                        View in Ad Library
+                                    </a>
                                 </td>
-                                <td
-                                    className="px-6 py-4 whitespace-nowrap"
-                                    onClick={(e) => {
-                                        // Only prevent default if clicking on the cell itself, not on buttons or links
-                                        if (e.target === e.currentTarget) {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            return false;
-                                        }
-                                    }}
-                                >
-                                    {(() => {
-                                        console.log('Rendering concept cell:', {
-                                            ad_archive_id: ad.ad_archive_id,
-                                            concept_status: ad.concept?.status,
-                                            isGeneratingConcept,
-                                            showGenerate,
-                                            concept: ad.concept
-                                        });
-
-                                        const isProcessing = isGeneratingConcept || (ad.concept && (ad.concept.status === 'pending' || ad.concept.status === 'processing'));
-
-                                        if (isProcessing) {
-                                            return (
-                                                <div className="flex items-center">
-                                                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-solid border-indigo-600 border-t-transparent"></div>
-                                                    <span className="text-sm text-gray-500">Processing...</span>
-                                                </div>
-                                            );
-                                        } else if (ad.concept?.status === 'completed') {
-                                            return (
-                                                <Link
-                                                    href={`/concepts/${ad.concept.id}`}
-                                                    className="text-indigo-600 hover:text-indigo-900"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                    }}
-                                                >
-                                                    View Concept
-                                                </Link>
-                                            );
-                                        } else if (ad.concept?.status === 'failed') {
-                                            return (
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        console.log('Retry Generation button clicked');
-                                                        const mediaUrl = adType === 'video'
-                                                            ? ad.snapshot?.videos?.[0]?.video_preview_image_url
-                                                            : (ad.snapshot?.cards?.find(card => card.resized_image_url)?.resized_image_url ||
-                                                                ad.snapshot?.images?.[0]?.resized_image_url);
-
-                                                        console.log('Retry Ad data:', {
-                                                            ad_archive_id: ad.ad_archive_id,
-                                                            adType,
-                                                            mediaUrl,
-                                                            hasVideos: ad.snapshot?.videos?.length,
-                                                            hasCards: ad.snapshot?.cards?.length,
-                                                            hasImages: ad.snapshot?.images?.length,
-                                                            snapshot: ad.snapshot
-                                                        });
-
-                                                        if (!mediaUrl) {
-                                                            console.error('No media URL found for ad:', ad.ad_archive_id);
-                                                            return;
-                                                        }
-
-                                                        if (onGenerateConcept) {
-                                                            console.log('Calling onGenerateConcept for retry with:', {
-                                                                ad_archive_id: ad.ad_archive_id,
-                                                                mediaUrl
-                                                            });
-                                                            onGenerateConcept(ad, mediaUrl);
-                                                        } else {
-                                                            console.error('onGenerateConcept callback is not defined');
-                                                        }
-                                                    }}
-                                                    className="text-indigo-600 hover:text-indigo-900"
-                                                >
-                                                    Retry Generation
-                                                </button>
-                                            );
-                                        } else if (showGenerate) {
-                                            return (
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        console.log('Generate Concept button clicked');
-                                                        const mediaUrl = adType === 'video'
-                                                            ? ad.snapshot?.videos?.[0]?.video_preview_image_url
-                                                            : (ad.snapshot?.cards?.find(card => card.resized_image_url)?.resized_image_url ||
-                                                                ad.snapshot?.images?.[0]?.resized_image_url);
-
-                                                        console.log('Ad data:', {
-                                                            ad_archive_id: ad.ad_archive_id,
-                                                            adType,
-                                                            mediaUrl,
-                                                            hasVideos: ad.snapshot?.videos?.length,
-                                                            hasCards: ad.snapshot?.cards?.length,
-                                                            hasImages: ad.snapshot?.images?.length,
-                                                            snapshot: ad.snapshot
-                                                        });
-
-                                                        if (!mediaUrl) {
-                                                            console.error('No media URL found for ad:', ad.ad_archive_id);
-                                                            return;
-                                                        }
-
-                                                        if (onGenerateConcept) {
-                                                            console.log('Calling onGenerateConcept with:', {
-                                                                ad_archive_id: ad.ad_archive_id,
-                                                                mediaUrl
-                                                            });
-                                                            onGenerateConcept(ad, mediaUrl);
-                                                        } else {
-                                                            console.error('onGenerateConcept callback is not defined');
-                                                        }
-                                                    }}
-                                                    className="text-indigo-600 hover:text-indigo-900"
-                                                >
-                                                    Generate Concept
-                                                </button>
-                                            );
-                                        }
-                                        return null;
-                                    })()}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    {ad.ad_recipe ? (
-                                        <Link
-                                            href={`/ad-recipes/${ad.ad_recipe.id}`}
-                                            className="text-sm text-indigo-600 hover:text-indigo-900"
-                                        >
-                                            View Ad
-                                        </Link>
-                                    ) : isAdInProgress ? (
+                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                    {isAdInProgress ? (
                                         <div className="flex items-center">
                                             <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-solid border-indigo-600 border-t-transparent"></div>
-                                            <span className="text-sm text-gray-500">Generating...</span>
+                                            <span className="text-indigo-600">Generating recipe...</span>
+                                        </div>
+                                    ) : recipeExists ? (
+                                        <div className="text-green-600">
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                Recipe {recipeStatus === 'completed' ? 'Ready' : recipeStatus}
+                                            </span>
                                         </div>
                                     ) : (
-                                        <button
-                                            onClick={() => {
-                                                if (ad.concept?.id && onGenerateAd) {
-                                                    onGenerateAd(ad.ad_archive_id, ad.concept.id);
-                                                }
-                                            }}
-                                            disabled={!conceptExists || (ad.concept && ad.concept.status !== 'completed')}
-                                            className={`inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md shadow-sm text-white ${!conceptExists || (ad.concept && ad.concept.status !== 'completed')
-                                                ? 'bg-gray-300 cursor-not-allowed'
-                                                : 'bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500'
-                                                }`}
-                                            title={!conceptExists ? "Generate a concept first" :
-                                                (ad.concept && ad.concept.status !== 'completed') ?
-                                                    "Concept generation in progress" :
-                                                    "Generate an ad from this concept"}
-                                        >
-                                            Generate Ad
-                                        </button>
+                                        <span className="text-gray-500">No recipe</span>
                                     )}
                                 </td>
                             </tr>
