@@ -38,6 +38,22 @@ export default function AdRecipesPage() {
 
                 const data = await response.json();
                 setRecipes(data.recipes || []);
+
+                // Check URL for recipe ID and open modal if found
+                if (typeof window !== 'undefined') {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const recipeId = urlParams.get('id');
+
+                    if (recipeId && data.recipes) {
+                        // Find the recipe with the matching ID
+                        const recipe = data.recipes.find((r: AdRecipe) => r.id === recipeId);
+                        if (recipe) {
+                            // Open the modal for this recipe
+                            setSelectedRecipe(recipe);
+                            setShowRecipeModal(true);
+                        }
+                    }
+                }
             } catch (err) {
                 console.error('Error fetching ad recipes:', err);
                 setError(err instanceof Error ? err.message : 'An error occurred');

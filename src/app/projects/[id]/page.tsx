@@ -125,6 +125,41 @@ export default function ProjectPage({ params }: { params: PageParams }) {
                 if (data.workflow) {
                     setWorkflowName(data.workflow.name);
                     setAds(data.workflow.ads || []);
+
+                    // Fetch ad recipes for the loaded ads
+                    const workflowAds = data.workflow.ads || [];
+                    if (workflowAds.length > 0) {
+                        try {
+                            // Fetch recipes from our API
+                            const recipesResponse = await fetch('/api/ad-recipes');
+                            if (recipesResponse.ok) {
+                                const recipesData = await recipesResponse.json();
+                                const recipes = recipesData.recipes || [];
+
+                                // Map recipes to ads
+                                if (recipes.length > 0) {
+                                    const updatedAds = workflowAds.map((ad: Ad) => {
+                                        // Find a recipe for this ad, if it exists
+                                        const recipe = recipes.find((r: any) => r.ad_archive_id === ad.ad_archive_id);
+                                        if (recipe) {
+                                            return {
+                                                ...ad,
+                                                ad_recipe: {
+                                                    id: recipe.id,
+                                                    status: 'completed'
+                                                }
+                                            };
+                                        }
+                                        return ad;
+                                    });
+                                    setAds(updatedAds);
+                                }
+                            }
+                        } catch (recipeError) {
+                            console.error('Error fetching ad recipes:', recipeError);
+                            // Continue with the flow even if recipes can't be fetched
+                        }
+                    }
                 }
 
                 // Setup default product

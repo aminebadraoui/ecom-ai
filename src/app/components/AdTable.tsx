@@ -246,9 +246,18 @@ export default function AdTable({
                                         </div>
                                     ) : recipeExists ? (
                                         <div className="text-green-600">
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                Recipe {recipeStatus === 'completed' ? 'Ready' : recipeStatus}
-                                            </span>
+                                            {recipeStatus === 'completed' ? (
+                                                <Link
+                                                    href={`/ad-recipes?id=${ad.ad_recipe?.id}`}
+                                                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 transition-colors"
+                                                >
+                                                    Recipe Ready
+                                                </Link>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                    Recipe {recipeStatus}
+                                                </span>
+                                            )}
                                         </div>
                                     ) : (
                                         <span className="text-gray-500">No recipe</span>
