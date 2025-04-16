@@ -29,7 +29,13 @@ export async function GET(request: Request) {
             );
         }
 
-        return NextResponse.json({ recipes });
+        // Add cache control headers to prevent caching
+        const response = NextResponse.json({ recipes, timestamp: new Date().toISOString() });
+        response.headers.set('Cache-Control', 'no-store, max-age=0');
+        response.headers.set('Pragma', 'no-cache');
+        response.headers.set('Expires', '0');
+
+        return response;
     } catch (error) {
         console.error('Error in GET /api/ad-recipes:', error);
         return NextResponse.json(

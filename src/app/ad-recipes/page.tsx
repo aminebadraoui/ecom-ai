@@ -30,13 +30,23 @@ export default function AdRecipesPage() {
             setIsLoading(true);
             try {
                 // Fetch from API endpoint instead of directly from Supabase
-                const response = await fetch('/api/ad-recipes');
+                // Add cache-busting query parameter and no-cache headers
+                const timestamp = new Date().getTime();
+                const response = await fetch(`/api/ad-recipes?t=${timestamp}`, {
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0'
+                    }
+                });
 
                 if (!response.ok) {
                     throw new Error(`Error: ${response.status} ${response.statusText}`);
                 }
 
                 const data = await response.json();
+                console.log('Fetched recipes:', data.recipes?.length, 'Timestamp:', data.timestamp);
                 setRecipes(data.recipes || []);
 
                 // Check URL for recipe ID and open modal if found
@@ -210,12 +220,52 @@ export default function AdRecipesPage() {
             <div className="px-4 py-6 sm:px-0">
                 <div className="flex justify-between items-center mb-6">
                     <h1 className="text-2xl font-semibold text-gray-900">Ad Recipes</h1>
-                    <Link
-                        href="/dashboard"
-                        className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                    >
-                        Back to Dashboard
-                    </Link>
+                    <div className="flex space-x-2">
+                        <button
+                            onClick={() => {
+                                setIsLoading(true);
+                                const timestamp = new Date().getTime();
+                                fetch(`/api/ad-recipes?t=${timestamp}`, {
+                                    cache: 'no-store',
+                                    headers: {
+                                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                                        'Pragma': 'no-cache',
+                                        'Expires': '0'
+                                    }
+                                })
+                                    .then(response => {
+                                        if (!response.ok) {
+                                            throw new Error(`Error: ${response.status} ${response.statusText}`);
+                                        }
+                                        return response.json();
+                                    })
+                                    .then(data => {
+                                        console.log('Refreshed recipes:', data.recipes?.length, 'Timestamp:', data.timestamp);
+                                        setRecipes(data.recipes || []);
+                                        toast.success('Recipes refreshed successfully');
+                                    })
+                                    .catch(err => {
+                                        console.error('Error refreshing ad recipes:', err);
+                                        toast.error('Failed to refresh recipes');
+                                    })
+                                    .finally(() => {
+                                        setIsLoading(false);
+                                    });
+                            }}
+                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Refresh
+                        </button>
+                        <Link
+                            href="/dashboard"
+                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Back to Dashboard
+                        </Link>
+                    </div>
                 </div>
 
                 {recipes.length === 0 ? (
