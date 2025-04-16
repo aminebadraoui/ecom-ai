@@ -14,11 +14,14 @@ export async function GET(request: Request) {
             );
         }
 
-        // Fetch all recipes
+        console.log('Ad recipes API - authenticated user:', user.id, user.email);
+
+        // Fetch all recipes - temporarily removing user_id filter for debugging
         const { data: recipes, error } = await supabaseAdmin
             .from('ad_recipes')
             .select('*')
-            .eq('user_id', user.id)
+            // Commenting out the user filter to see if recipes exist
+            // .eq('user_id', user.id)
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -29,8 +32,23 @@ export async function GET(request: Request) {
             );
         }
 
+        console.log('Ad recipes API - found recipes:', recipes?.length);
+
+        if (recipes && recipes.length > 0) {
+            // Log the first recipe's user_id to check if it matches
+            console.log('First recipe user_id:', recipes[0].user_id, 'Current user_id:', user.id);
+            console.log('Recipe creation dates:', recipes.map(r => r.created_at).join(', '));
+        }
+
         // Add cache control headers to prevent caching
-        const response = NextResponse.json({ recipes, timestamp: new Date().toISOString() });
+        const response = NextResponse.json({
+            recipes,
+            timestamp: new Date().toISOString(),
+            debug: {
+                currentUserId: user.id,
+                recipeCount: recipes?.length || 0
+            }
+        });
         response.headers.set('Cache-Control', 'no-store, max-age=0');
         response.headers.set('Pragma', 'no-cache');
         response.headers.set('Expires', '0');
